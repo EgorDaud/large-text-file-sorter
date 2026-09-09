@@ -1,0 +1,45 @@
+<Project>
+
+  <!-- The two programs and their tests target the same runtime and share the
+       same language settings. Repeating them in four files invites drift. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <!-- Static analysis. The analyzers ship with the SDK, so this costs no
+       dependency; all it takes is asking for more than the default set and
+       letting the code-style rules in .editorconfig reach the build, where
+       TreatWarningsAsErrors above turns both into failures rather than
+       warnings someone scrolls past. -->
+  <PropertyGroup>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>Recommended</AnalysisMode>
+
+    <!-- Three categories run past Recommended, because they hold the rules worth
+         failing on for a program that streams gigabytes through pooled buffers and
+         file handles. At `All` they cost four opt-outs, each named and explained in
+         .editorconfig. The remaining categories stay at Recommended: at `All` they
+         ask for exception constructor overloads, culture-aware string comparisons and
+         localized console output, none of which this code wants. -->
+    <AnalysisModePerformance>All</AnalysisModePerformance>
+    <AnalysisModeReliability>All</AnalysisModeReliability>
+    <AnalysisModeUsage>All</AnalysisModeUsage>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+    <!-- IDE0005 (unused using directive) is only reported during a build when the
+         compiler is also producing documentation, which is a Roslyn limitation
+         rather than a choice: https://github.com/dotnet/roslyn/issues/41640.
+         These are console programs, not published libraries, so the resulting XML
+         is a build artefact nobody reads. The two doc-completeness warnings that
+         come with it are a library publishing standard, not one worth holding two
+         console programs to: CS1591 wants a doc comment on every public member,
+         and CS1573 wants every parameter documented once any one of them is. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
+  </PropertyGroup>
+
+</Project>

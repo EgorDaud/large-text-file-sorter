@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>sorter</AssemblyName>
+    <RootNamespace>FileSorter</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Akka.Streams" Version="1.5.71" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FileSorter.Tests" />
+    <!-- Benchmarks measure internal algorithms directly. -->
+    <InternalsVisibleTo Include="FileSorter.Benchmarks" />
+  </ItemGroup>
+
+</Project>

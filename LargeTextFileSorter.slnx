@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FileSorter/FileSorter.csproj" />
+    <Project Path="src/TestFileGenerator/TestFileGenerator.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FileSorter.Tests/FileSorter.Tests.csproj" />
+    <Project Path="tests/TestFileGenerator.Tests/TestFileGenerator.Tests.csproj" />
+  </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/FileSorter.Benchmarks/FileSorter.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/docs/">
+    <File Path="docs/design-spec.md" />
+    <File Path="docs/test-strategy.md" />
+  </Folder>
+</Solution>

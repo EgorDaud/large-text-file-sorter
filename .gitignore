@@ -1,0 +1,49 @@
+# Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+.vscode/
+
+.claude/
+.agents/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Test and benchmark output
+[Tt]est[Rr]esult*/
+BenchmarkDotNet.Artifacts/
+*.trx
+*.coverage
+coverage*.json
+coverage*.xml
+
+# NuGet
+*.nupkg
+packages/
+.nuget/
+
+# Generated test data and sort scratch space.
+# The generator produces multi-gigabyte files; committing one by accident
+# would be unrecoverable in practice, so keep every data path out of git.
+data/
+testdata/
+tmp/
+*.generated.txt
+*.sorted.txt
+*.run
+*.tmp
+
+# Vendored Akka.Streams documentation, kept local rather than submitted.
+docs/akka-streams/
+
+# OS noise
+Thumbs.db
+.DS_Store

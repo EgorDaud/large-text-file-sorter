@@ -1,0 +1,197 @@
+# Two jobs. Describe the house style precisely enough that `dotnet format` can
+# enforce it, and set analyzer severities so the build fails on the rules worth
+# failing on. Directory.Build.props sets TreatWarningsAsErrors, so every rule
+# below at `warning` is a build break, and every rule at `suggestion` is advice
+# the IDE shows and CI ignores.
+
+root = true
+
+[*]
+indent_style = space
+indent_size = 4
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.{json,yml,yaml,csproj,props,targets,slnx,xml}]
+indent_size = 2
+
+[*.md]
+# Two trailing spaces are a hard line break in Markdown.
+trim_trailing_whitespace = false
+
+[*.cs]
+
+#### Language and file organisation ####
+
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_using_directive_placement = outside_namespace:warning
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
+
+# Explicit types everywhere. This code deals in byte counts, byte offsets, line
+# numbers and lengths, which are all integers of different widths and meanings;
+# the declared type is the part worth reading.
+csharp_style_var_for_built_in_types = false:warning
+csharp_style_var_when_type_is_apparent = false:warning
+csharp_style_var_elsewhere = false:warning
+
+# Braces always. A single-statement `if` without them is one careless edit away
+# from a bug that reads correctly.
+csharp_prefer_braces = true:warning
+
+#### Formatting ####
+
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_new_line_before_members_in_object_initializers = true
+csharp_new_line_before_members_in_anonymous_types = true
+csharp_new_line_between_query_expression_clauses = true
+
+csharp_indent_case_contents = true
+csharp_indent_switch_labels = true
+csharp_indent_labels = one_less_than_current
+csharp_indent_block_contents = true
+csharp_indent_braces = false
+csharp_indent_case_contents_when_block = false
+
+csharp_space_after_cast = false
+csharp_space_after_keywords_in_control_flow_statements = true
+csharp_space_before_colon_in_inheritance_clause = true
+csharp_space_after_colon_in_inheritance_clause = true
+csharp_space_around_binary_operators = before_and_after
+csharp_space_between_method_declaration_parameter_list_parentheses = false
+csharp_space_between_method_call_parameter_list_parentheses = false
+csharp_space_between_parentheses = false
+csharp_space_between_square_brackets = false
+
+csharp_preserve_single_line_statements = false
+csharp_preserve_single_line_blocks = true
+
+# IDE0055 is the single diagnostic covering everything in this section, and it is
+# deliberately off. The codebase aligns declaration columns and trailing comments
+# into columns -- `public byte[]         Buffer`, `IReadOnlyList<int>   CarriedForward`
+# -- which reads well in types that are mostly parallel fields of different widths,
+# and which no EditorConfig setting can express. Enforcing IDE0055, or running
+# `dotnet format`, would collapse all of it. Everything else in this file is still
+# enforced; only whitespace is left to the author.
+dotnet_diagnostic.IDE0055.severity = none
+
+#### Modern C# the codebase already uses ####
+
+dotnet_style_readonly_field = true:warning
+dotnet_style_object_initializer = true:suggestion
+dotnet_style_collection_initializer = true:suggestion
+dotnet_style_prefer_conditional_expression_over_assignment = true:suggestion
+dotnet_style_prefer_conditional_expression_over_return = true:suggestion
+dotnet_style_null_propagation = true:warning
+dotnet_style_coalesce_expression = true:warning
+dotnet_style_prefer_compound_assignment = true:warning
+dotnet_style_prefer_is_null_check_over_reference_equality_method = true:warning
+dotnet_style_predefined_type_for_locals_parameters_members = true:warning
+dotnet_style_predefined_type_for_member_access = true:warning
+dotnet_style_qualification_for_field = false:warning
+dotnet_style_qualification_for_property = false:warning
+dotnet_style_qualification_for_method = false:warning
+dotnet_style_qualification_for_event = false:warning
+
+csharp_style_prefer_pattern_matching = true:suggestion
+csharp_style_prefer_not_pattern = true:warning
+csharp_style_prefer_range_operator = true:warning
+csharp_style_prefer_index_operator = true:warning
+csharp_prefer_simple_using_statement = true:suggestion
+csharp_prefer_static_local_function = true:warning
+csharp_style_expression_bodied_methods = when_on_single_line:suggestion
+csharp_style_expression_bodied_properties = when_on_single_line:suggestion
+csharp_style_expression_bodied_accessors = when_on_single_line:suggestion
+
+# Unused code is the one style category that hides bugs rather than merely
+# reading badly, so it fails the build.
+dotnet_diagnostic.IDE0005.severity = warning
+dotnet_diagnostic.IDE0035.severity = warning
+dotnet_diagnostic.IDE0051.severity = warning
+dotnet_diagnostic.IDE0052.severity = warning
+dotnet_diagnostic.IDE0059.severity = warning
+dotnet_diagnostic.IDE0060.severity = warning
+
+#### Analyzer categories raised past Recommended ####
+
+# Directory.Build.props runs Performance, Reliability and Usage at `All`. Two rules in
+# those categories are wrong everywhere and are turned off here; two more are worth
+# keeping over the programs and not over the tests, and are turned off in the test
+# section at the end of this file. Everything else in the three categories stays on.
+
+# Both programs are console applications with no synchronization context. ConfigureAwait
+# would appear on every await in the codebase and change nothing about how it runs.
+dotnet_diagnostic.CA2007.severity = none
+
+# CA1849 wants async overloads for writes to Console, whose TextWriter is synchronized:
+# WriteLineAsync there wraps the same blocking write and returns a completed task. The
+# remaining production hits are stream disposal inside catch blocks and two
+# CancellationTokenSource.Cancel calls, where blocking is also the right call.
+dotnet_diagnostic.CA1849.severity = none
+
+# Not part of a category raised above, but worth failing on: a P/Invoke with no declared
+# search path resolves its DLL against the process directory before the system one.
+dotnet_diagnostic.CA5392.severity = warning
+
+#### Naming ####
+
+# Rules are matched in the order they appear, so the constant and static-readonly
+# rules have to precede the instance-field rule they would otherwise be caught by.
+# The per-rule severities below only reach the IDE. IDE1006 is the diagnostic the
+# compiler reports them under, so it has to be raised too for a naming violation to
+# fail the build rather than merely show a squiggle.
+dotnet_diagnostic.IDE1006.severity = warning
+
+dotnet_naming_rule.constants_pascal_case.severity = warning
+dotnet_naming_rule.constants_pascal_case.symbols = constants
+dotnet_naming_rule.constants_pascal_case.style = pascal_case
+
+dotnet_naming_rule.static_readonly_fields_pascal_case.severity = warning
+dotnet_naming_rule.static_readonly_fields_pascal_case.symbols = static_readonly_fields
+dotnet_naming_rule.static_readonly_fields_pascal_case.style = pascal_case
+
+dotnet_naming_rule.private_fields_underscore_camel_case.severity = warning
+dotnet_naming_rule.private_fields_underscore_camel_case.symbols = private_fields
+dotnet_naming_rule.private_fields_underscore_camel_case.style = underscore_camel_case
+
+dotnet_naming_symbols.constants.applicable_kinds = field
+dotnet_naming_symbols.constants.applicable_accessibilities = *
+dotnet_naming_symbols.constants.required_modifiers = const
+
+dotnet_naming_symbols.static_readonly_fields.applicable_kinds = field
+dotnet_naming_symbols.static_readonly_fields.applicable_accessibilities = *
+dotnet_naming_symbols.static_readonly_fields.required_modifiers = static, readonly
+
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_symbols.private_fields.required_modifiers =
+
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+dotnet_naming_style.underscore_camel_case.required_prefix = _
+dotnet_naming_style.underscore_camel_case.capitalization = camel_case
+
+[tests/**/*.cs]
+
+# Test method names are sentences describing the behaviour under test, so the
+# underscores are the point. This is the only naming rule the tests bend.
+dotnet_diagnostic.CA1707.severity = none
+
+# CA1859 asks helpers to take concrete collection types for speed. The helpers here
+# deliberately take the same interface the production signature takes, so the test
+# exercises the real call shape; a few interface dispatches in a unit test are not
+# worth trading that for.
+dotnet_diagnostic.CA1859.severity = none
+
+# CA2000 and CA2213 stay on over src, where a stream that outlives its scope is a leaked
+# handle on a machine already running at its file-handle and memory limits. Over the
+# tests they report nothing but noise: a test's ChunkReader is IAsyncDisposable and held
+# by `await using`, which CA2000 does not recognise, its MemoryStreams hold no handle
+# worth releasing, and the Akka fixture shuts its ActorSystem down with Terminate rather
+# than Dispose. A test that leaks anything real fails on its own next run.
+dotnet_diagnostic.CA2000.severity = none
+dotnet_diagnostic.CA2213.severity = none

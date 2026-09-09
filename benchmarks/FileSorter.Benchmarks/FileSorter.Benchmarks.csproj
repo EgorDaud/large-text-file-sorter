@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>FileSorter.Benchmarks</RootNamespace>
+
+    <!-- Keep long-running benchmarks out of dotnet test discovery. -->
+    <IsTestProject>false</IsTestProject>
+
+    <!-- BenchmarkDotNet requires public benchmark members and owns their cleanup. -->
+    <NoWarn>$(NoWarn);CA1515;CA1822;CA1001</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- FileSorter grants this project access to measured internal types. -->
+    <ProjectReference Include="..\..\src\FileSorter\FileSorter.csproj" />
+  </ItemGroup>
+
+</Project>

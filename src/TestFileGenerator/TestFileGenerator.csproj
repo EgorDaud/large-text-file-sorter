@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>generator</AssemblyName>
+    <RootNamespace>TestFileGenerator</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="TestFileGenerator.Tests" />
+    <!-- The round-trip test needs both copies of the line grammar. -->
+    <InternalsVisibleTo Include="FileSorter.Tests" />
+  </ItemGroup>
+
+</Project>
