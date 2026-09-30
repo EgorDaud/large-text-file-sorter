@@ -28,7 +28,7 @@ internal static class CommandLine
           --memory       Memory budget: a byte count, optionally suffixed B, KiB, MiB or GiB. Default 1GiB.
           --max-line     Maximum line length: a byte count, optionally suffixed B, KiB, MiB or GiB. Default 64KiB, maximum 2147483631 (int.MaxValue - 16).
           --parallelism  Degree of parallelism for phase one (run generation). Default: the processor count.
-          --pipeline     Run-generation strategy, 'akka' or 'channels'. Default akka.
+          --pipeline     Run-generation strategy, 'akka' or 'channels'. Default channels.
 
         Verify mode:
           --verify       Checks that <output> is a valid sort of <input> under the sorter's own order,
@@ -72,7 +72,7 @@ internal static class CommandLine
         long memoryBudgetBytes = DefaultMemoryBudgetBytes;
         int maxLineLength = DefaultMaxLineLength;
         int parallelism = Environment.ProcessorCount;
-        Pipeline pipeline = Pipeline.Akka;
+        Pipeline pipeline = Pipeline.Channels;
 
         for (int i = 0; i < args.Length; i++)
         {
