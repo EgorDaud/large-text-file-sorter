@@ -854,7 +854,7 @@ sorter    --verify <input> <output> [--max-line 64KiB]
 generator <output> --size 100GiB [--seed 42] [--duplicate-ratio 0.1]
 ```
 
-Defaults: `--memory 1GiB`, `--max-line 64KiB`, `--parallelism` = processor count, `--pipeline akka`, `--temp` = the output file's directory, `--seed` = 0, `--duplicate-ratio` = 0.1. Sizes accept `B`, `KiB`, `MiB`, `GiB` suffixes and a bare byte count. Argument parsing is hand written, roughly forty lines, with no `System.CommandLine` dependency.
+Defaults: `--memory 1GiB`, `--max-line 64KiB`, `--parallelism` = processor count, `--pipeline channels`, `--temp` = the output file's directory, `--seed` = 0, `--duplicate-ratio` = 0.1. Sizes accept `B`, `KiB`, `MiB`, `GiB` suffixes and a bare byte count. Argument parsing is hand written, roughly forty lines, with no `System.CommandLine` dependency.
 
 `--verify` shares the `--max-line` flag but not sort mode's ceiling: sort mode's feeds `MemoryBudget.Calculate` and is capped at `int.MaxValue - 16`, while `--verify`'s feeds `OutputVerifier`'s fixed `BaseBufferSize + maxLineLength` buffer and is capped lower, at `Array.MaxLength - BaseBufferSize`, so a value between the two ceilings is rejected with exit 3 rather than reaching that allocation and crashing with an unhandled `ArgumentOutOfRangeException`.
 
@@ -906,7 +906,7 @@ Cancellation in the sorter: `Console.CancelKeyPress` cancels the token, every as
 
 | # | Decision | Rationale |
 |---|---|---|
-| D1 | Both run-generation strategies ship, selectable by `--pipeline`, default `akka`; the `ActorSystem` is created only inside the Akka branch | Two real implementations earn the seam, and the benchmark baseline is the benefit not otherwise obtainable. Deleting the flag would leave `ChannelRunGeneration` referenced only from tests, which reads as dead code |
+| D1 | Both run-generation strategies ship, selectable by `--pipeline`, default `channels`; the `ActorSystem` is created only inside the Akka branch | Two real implementations earn the seam, and the benchmark baseline is the benefit not otherwise obtainable. Deleting the flag would leave `ChannelRunGeneration` referenced only from tests, which reads as dead code. 2026-09-30: the default moved from `akka` to `channels`, since a re-measurement put phase one at parity (31.7 s against 31.4 s at 20 GiB) and the default path then carries no third-party actor system; `--pipeline akka` remains for its composition and failure semantics |
 | D2 | Maximum line length is enforced in `LineCursor`, not `LineParser` | The component that must bound its carry-over enforces the bound. CB-12 and CB-16 carry both boundary cases at the splitter |
 | D3 | The merge selects through a loser tree private to `KWayMerge`, not a BCL `PriorityQueue` | A 4-ary heap pays a sift-down and a sift-up per output line, each comparison an interface call on a boxed struct; a loser tree pays at most `⌈log2 k⌉` direct comparisons and needs no comparer type at all |
 | D4 | Hand-written argument parsing | One fewer dependency for roughly forty lines |

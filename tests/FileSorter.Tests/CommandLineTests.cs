@@ -18,7 +18,7 @@ public sealed class CommandLineTests
         Assert.Equal(1L * 1024 * 1024 * 1024, options.MemoryBudgetBytes);
         Assert.Equal(64 * 1024, options.MaxLineLength);
         Assert.Equal(Environment.ProcessorCount, options.Parallelism);
-        Assert.Equal(Pipeline.Akka, options.Pipeline);
+        Assert.Equal(Pipeline.Channels, options.Pipeline);
     }
 
     [Fact]
@@ -41,13 +41,13 @@ public sealed class CommandLineTests
                 "--memory", "2GiB",
                 "--max-line", "128KiB",
                 "--parallelism", "3",
-                "--pipeline", "channels",
+                "--pipeline", "akka",
             ],
             out SorterOptions? options,
             out _));
 
         Assert.Equal(
-            new SorterOptions("in.txt", "out.txt", "scratch", 2L * 1024 * 1024 * 1024, 128 * 1024, 3, Pipeline.Channels),
+            new SorterOptions("in.txt", "out.txt", "scratch", 2L * 1024 * 1024 * 1024, 128 * 1024, 3, Pipeline.Akka),
             options);
     }
 

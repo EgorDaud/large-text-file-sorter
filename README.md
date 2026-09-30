@@ -40,7 +40,7 @@ At that size the sort produces a dozen or so runs — the count follows from you
 | `--memory` | 1GiB | Budget for the program's own buffers, in both phases; not a process working-set limit |
 | `--max-line` | 64KiB | Longest accepted line; a longer line is malformed |
 | `--parallelism` | processor count | Concurrent sort-and-spill operations in phase one, and the ceiling on phase two's merge workers |
-| `--pipeline` | akka | Which run-generation scheduler to use |
+| `--pipeline` | channels | Which run-generation scheduler to use |
 | `--verify` | — | Checks `<output>` is a valid sort of `<input>`, for results too large to re-sort |
 | `--size` | — | Generator output size; accepts `B`, `KiB`, `MiB`, `GiB` or a bare byte count, here and in the sorter |
 | `--seed` | 0 | The same seed reproduces byte-identical generator output |
@@ -198,10 +198,10 @@ Every correctness-bearing decision sits behind a plain, dependency-free seam, so
 
 ## Why Akka.Streams, and why two pipelines
 
-Phase one's orchestration ships in two interchangeable implementations behind one delegate, selectable with `--pipeline`: **`akka`** (default) uses `Source.UnfoldAsync` with `SelectAsyncUnordered` over sort-and-spill; **`channels`** uses a bounded `Channel<Chunk>` and `Parallel.ForEachAsync`, with no third-party dependency. Both are about thirty lines, and neither owns a resource.
+Phase one's orchestration ships in two interchangeable implementations behind one delegate, selectable with `--pipeline`: **`channels`** (default) uses a bounded `Channel<Chunk>` and `Parallel.ForEachAsync`, with no third-party dependency; **`akka`** uses `Source.UnfoldAsync` with `SelectAsyncUnordered` over sort-and-spill. Each is a short single-purpose file (88 and 138 lines), and neither owns a resource.
 
 **What bounds in-flight work is the buffer pool, in both cases** — it holds `parallelism + 2` slots, so acquisition blocks the reader before either scheduler's own bound binds. Neither supplies the backpressure; both inherit it. That matters because the alternative claim is untestable: an assertion written against a scheduler's own bound would pass against a scheduler with no flow control at all, so the suite asserts against outstanding pool buffers instead.
 
 Akka.Streams is therefore not doing the memory-bounding work. It provides composition and failure semantics that the Channels implementation reproduces by hand, and keeping both turned that into a measured claim — two asymmetries surfaced only under comparison. **Exception type:** Akka wraps a stage failure in an `AggregateException` where `await` unwraps the Channels path, so without an assertion that both surface the same type, one corrupt file would have produced different exit codes under different pipelines. **Completion:** Akka's task completes the instant the graph faults while offloaded sibling spills keep writing, so that pipeline must track every read and spill it starts — which `Parallel.ForEachAsync` gives Channels for nothing.
 
-**The default is `akka`, defended on those failure semantics rather than on speed;** an operator who does not need them can pass `--pipeline channels`.
+**The default is `channels`: it carries no third-party dependency and gives up nothing measurable.** The isolated comparison in [measurements](docs/measurements.md) puts Akka at about 3% of phase one at 20 GiB, and a later interleaved re-run measured the two at parity (31.7 s against 31.4 s, inside that run's noise). `akka` stays as the opt-in (`--pipeline akka`) for its stream composition and failure semantics, which are the reason to keep it rather than a speed claim.

@@ -25,7 +25,7 @@ The merge is the unreliable half because of the drive: eight workers share one w
 
 ## 1. The reference sort, at 20 GiB
 
-Ten consecutive sorts at `--memory 4GiB` on the default `akka` pipeline. Section 4 reads the same series, interleaved with ten `channels` sorts, as a pipeline comparison.
+Ten consecutive sorts at `--memory 4GiB` on the `akka` pipeline (the default when measured; the default is now `channels`). Section 4 reads the same series, interleaved with ten `channels` sorts, as a pipeline comparison.
 
 | | 20 GiB @ 4 GiB, ten runs |
 |---|---|
@@ -185,7 +185,7 @@ Against the same shape with a real spiller, the realistic run costs **five to se
 
 ### 4.5 The bottom line
 
-Akka costs about 3% of phase one at 20 GiB and 2–3% more allocation. It is still the default, and not defended on speed: it rests on composition and failure semantics, which the README explains. An operator who wants the 3% back can pass `--pipeline channels`.
+Akka costs about 3% of phase one at 20 GiB and 2–3% more allocation. It was the default when this was measured, and was not defended on speed: it rests on composition and failure semantics, which the README explains. The default has since moved to `channels` (design-spec D1, 2026-09-30); `--pipeline akka` remains the opt-in.
 
 ---
 
