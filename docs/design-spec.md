@@ -239,7 +239,7 @@ internal static class LineParser
 }
 ```
 
-The only place that knows the line grammar. It returns `false` rather than throwing, so the hot path has no exception cost and the caller — which knows the byte offset and line number — owns the diagnostic. The boundary is the first `.` in the line: the number is a signed 64-bit integer and cannot contain a period, so no lookahead for a following space is needed. One space immediately after the period is consumed if present. No decoding, no allocation, no encoding validation, and under D2 no length logic.
+The only place that knows the line grammar. It returns `false` rather than throwing, so the hot path has no exception cost and the caller — which knows the byte offset and line number — owns the diagnostic. The boundary is the first `.` in the line: the number is an optional sign followed by ASCII digits only, within the signed 64-bit range, and cannot contain a period, so no lookahead for a following space is needed. The digits are checked by a span scan before `long.TryParse`, which alone would ignore trailing NULs. One space immediately after the period is consumed if present. No decoding, no allocation, no encoding validation, and under D2 no length logic.
 
 ### 4.2 LineCursor
 

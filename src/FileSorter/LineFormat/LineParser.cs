@@ -20,7 +20,17 @@ internal static class LineParser
             return false;
         }
 
-        if (!long.TryParse(line[..separatorIndex], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out number))
+        // Grammar is [+-]?[0-9]+; long.TryParse alone would also accept trailing NULs.
+        // The scan is a vectorised early-exit over the field, and TryParse then does the range check.
+        ReadOnlySpan<byte> field = line[..separatorIndex];
+        ReadOnlySpan<byte> digits = field.Length > 0 && (field[0] is (byte)'+' or (byte)'-') ? field[1..] : field;
+        if (digits.IsEmpty || digits.IndexOfAnyExceptInRange((byte)'0', (byte)'9') >= 0)
+        {
+            number = 0;
+            return false;
+        }
+
+        if (!long.TryParse(field, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out number))
         {
             return false;
         }
