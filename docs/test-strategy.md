@@ -393,6 +393,7 @@ For testing, the merge must accept in-memory sorted sequences rather than requir
 | MP-08 | Never emits a group of size one | Run counts chosen so that naive division leaves a remainder of one, tested across several fan-in values | No group of size one in any pass; the odd run is either carried forward or absorbed into an under-full group |
 | MP-09 | Balances group sizes within a pass | A run count that does not divide evenly by the fan-in | Groups differ in size by at most one, rather than several full groups plus one nearly empty group |
 | MP-10 | Predicts a pass count matching actual execution | A run count and fan-in used both to plan and to drive a real merge over small in-memory runs | The number of passes actually executed equals the number predicted |
+| MP-11 | A first-pass run that cannot be deleted during a multi-pass merge warns but neither aborts the merge nor leaks the run (COR-5) | Ten runs at a fan-in of three; the first run marked read-only before the merge, so the merge still reads it but its delete is refused (`UnauthorizedAccessException`; a sharing hold would lock the merge out, since it opens runs with `FileShare.None`), and the attribute cleared afterwards; Windows only, skipped elsewhere | The merge completes with correct output; stderr names the held run exactly once; the run survives the merge; after the attribute is cleared and the set disposed, the run and its private directory are gone |
 
 **The planner never plans a pass it does not need.** MP-08 keeps it from emitting a group of size one, and MP-05 keeps it from emitting a pass at all when there is a single run. Both rules exist for the same reason: a pass that produces no ordering change still reads and rewrites every byte of the dataset. The single-run case is then handled by placement rather than by merging, which is specified with the merge in Unit 6.
 
@@ -605,6 +606,7 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 | TR-02 | Two instances sharing the same requested parent use different private directories | Two `TemporaryRunSet`s constructed over the same directory | Their first run paths sit in two different directories, and are themselves different paths |
 | TR-03 | Constructing the set does not yet create a private directory | A single `TemporaryRunSet`, immediately after construction, before any run path is requested | The requested directory has no subdirectories yet |
 | TR-04 | Disposing removes the private directory even when the parent already existed | A pre-existing requested directory, one run file created and written | The requested directory survives; its private subdirectory does not |
+| TR-05 | Deleting a run that is held open does not throw, and disposing removes it once released (COR-5) | One run file opened with `FileShare.Read`, then `Delete`; the handle released; then `Dispose`; Windows only, skipped elsewhere | `Delete` does not throw and the file still exists; after `Dispose` the file and its private directory are gone |
 
 ---
 

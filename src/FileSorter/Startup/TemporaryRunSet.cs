@@ -35,14 +35,27 @@ internal sealed class TemporaryRunSet : IDisposable
         }
     }
 
+    // Best-effort: a scanner or indexer can briefly hold a finished run, and that must
+    // not abort a long merge or make Program discard a completed output. A path is
+    // untracked only once its delete succeeded, so a failed one stays tracked and
+    // Dispose retries it. The delete itself stays outside the lock.
     public void Delete(string runPath)
     {
+        try
+        {
+            File.Delete(runPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(
+                $"Could not delete the temporary run file at {runPath}, retrying at exit: {ex.Message}");
+            return;
+        }
+
         lock (_gate)
         {
             _paths.Remove(runPath);
         }
-
-        File.Delete(runPath);
     }
 
     public void Dispose()

@@ -7,6 +7,9 @@ namespace FileSorter.Tests.Startup;
 // specifically to own temp files, so its tests use a real scratch directory rather than
 // a MemoryStream. Every test creates and removes that directory itself, so the suite
 // leaves nothing behind regardless of what TemporaryRunSet's own cleanup does.
+// In the "Program" collection because TR-05 makes Delete write to the process-wide
+// Console.Error, which the sort tests swap out to capture their own stderr.
+[Collection("Program")]
 public sealed class TemporaryRunSetTests : IDisposable
 {
     private readonly string _directory =
@@ -61,6 +64,40 @@ public sealed class TemporaryRunSetTests : IDisposable
         using TemporaryRunSet runs = new(_directory);
 
         Assert.Empty(Directory.GetDirectories(_directory));
+    }
+
+    [Fact]
+    [Trait("Case", "TR-05")]
+    public void Deleting_a_run_that_is_held_open_does_not_throw_and_dispose_removes_it_once_released()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Deleting an open file succeeds on Unix; only Windows raises a sharing violation.");
+
+        // A scanner or indexer briefly holding a finished run is the case: the delete
+        // fails, must not abort the caller, and must leave the path tracked so Dispose
+        // gets another chance once the holder is gone.
+        TemporaryRunSet runs = new(_directory);
+        string path = runs.CreateRunPath();
+        File.WriteAllBytes(path, [1, 2, 3]);
+        string? privateDirectory = Path.GetDirectoryName(path);
+        Assert.NotNull(privateDirectory);
+
+        FileStream holder = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        try
+        {
+            Exception? thrown = Record.Exception(() => runs.Delete(path));
+
+            Assert.Null(thrown);
+            Assert.True(File.Exists(path));
+        }
+        finally
+        {
+            holder.Dispose();
+        }
+
+        runs.Dispose();
+
+        Assert.False(File.Exists(path));
+        Assert.False(Directory.Exists(privateDirectory));
     }
 
     [Fact]
