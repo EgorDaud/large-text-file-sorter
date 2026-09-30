@@ -206,6 +206,17 @@ Akka costs about 3% of phase one at 20 GiB and 2–3% more allocation. It was th
 
 **The one-worker row is not comparable with `MergeBenchmarks.Disk`** (1,256.3 ms from disk, 660.1 ms from memory): it forces the eight-worker plan's much smaller per-worker window down to one worker rather than solving fresh for one worker at that budget.
 
+### Sparse against plain preallocation
+
+Measured 2026-09-30 on the seed-42 20 GiB file (NTFS on the same NVMe drive, input, runs and output on one volume): the shipped build against a scratch build whose `SparseFile.TryMarkSparse` returns `false`, so the partitioned output is preallocated plain and NTFS zero-fills ahead of the higher-offset workers. One discarded warm-up, then sparse, plain, plain, sparse, so a drift across the series cancels. Merge time is total minus phase one; output wait is summed across workers.
+
+| Configuration | Merge workers | Merge, sparse | Merge, plain | Output wait, sparse | Output wait, plain |
+|---|---|---|---|---|---|
+| `--memory 1GiB` (default) | 2 | 70.8 s, 73.5 s | 70.9 s, 79.7 s | 10.8 s, 11.4 s | 21.2 s, 29.8 s |
+| `--memory 4GiB` | 8 | 34.0 s, 33.4 s | 53.5 s, 53.7 s | 84.4 s, 85.0 s | 215.4 s, 218.6 s |
+
+**Sparse preallocation is what lets the partitioned merge scale.** At eight workers the plain file makes the merge 59% slower and multiplies output wait by 2.6, because every worker but the first waits on zero-fill before its first byte lands; at two workers, where only one slice starts past offset 0, output wait still doubles while the merge moves 4%. Both outputs hash to the same `A3A86CFA…3E6F13`: the difference is time only. Kept, against the review's keep-if-≥5%-merge-or-≥10%-wait rule set before measuring.
+
 ---
 
 ## 6. Inside the chunk sort
