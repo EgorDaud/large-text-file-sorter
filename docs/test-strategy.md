@@ -572,6 +572,7 @@ Three tiers are specified here: property-based, integration, and streaming-layer
 | IT-06 | Sorting a file beginning with a byte order mark sorts correctly | A UTF-8 BOM, then several ordinary lines | Output matches the oracle; the mark is not part of the first line's number or string part |
 | IT-07 | The capacity precheck against the real temp volume reports Sufficient | `TempCapacity.Evaluate` fed a real `DriveInfo.AvailableFreeSpace` reading for the machine running the suite, against a trivially small input size | Outcome is `Sufficient` |
 | IT-08 | Placing a single run across two genuinely different volumes falls back to a copy | A small single-run input, `--temp` and the output path on two different real drive roots, detected and confirmed writable at run time | Exit 0; output correct; no leftover `run-*.tmp` in the temp directory |
+| IT-09 | The capacity precheck treats a UNC share as unknown instead of throwing | `CapacityProbe.CheckCapacity` given a UNC-shaped `--temp` and output directory (`\\nonexistent-host-for-test\share\sub`); Windows only, skipped elsewhere | Returns no exit code, so the sort proceeds; the stderr warning says free space could not be determined; no exception |
 
 ---
 

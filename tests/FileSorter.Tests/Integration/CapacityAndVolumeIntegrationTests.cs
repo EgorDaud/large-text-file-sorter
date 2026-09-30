@@ -5,7 +5,7 @@ namespace FileSorter.Tests.Integration;
 
 /// <summary>
 /// What remains of the startup-capacity and single-run-placement behaviour once the
-/// decisions themselves are behind seams and unit tested: both cases below exercise the
+/// decisions themselves are behind seams and unit tested: each case below exercises the
 /// real operating system rather than an injected number or a stubbed delegate.
 /// </summary>
 [Collection("Program")]
@@ -98,6 +98,35 @@ public sealed class CapacityAndVolumeIntegrationTests : IDisposable
         {
             Directory.Delete(outputDirectory, recursive: true);
         }
+    }
+
+    [Fact]
+    [Trait("Case", "IT-09")]
+    public void The_capacity_precheck_treats_a_UNC_share_as_unknown_instead_of_throwing()
+    {
+        // DriveInfo rejects any root that is not a drive letter with ArgumentException,
+        // and does so in the constructor without contacting the host, so this host name
+        // needs no network access and cannot stall on a timeout. The directory need not
+        // exist: neither the probe nor the same-volume comparison touches it.
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "UNC roots and DriveInfo's drive-letter rule are Windows concepts.");
+
+        const string uncDirectory = @"\\nonexistent-host-for-test\share\sub";
+
+        TextWriter originalError = Console.Error;
+        StringWriter capturedError = new();
+        int? exitCode;
+        Console.SetError(capturedError);
+        try
+        {
+            exitCode = CapacityProbe.CheckCapacity(inputSizeBytes: 1024, uncDirectory, uncDirectory);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        Assert.Null(exitCode);
+        Assert.Contains("Could not determine free space", capturedError.ToString());
     }
 
     // A volume other than excludedRoot that is ready and actually writable by this
