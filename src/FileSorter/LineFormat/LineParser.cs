@@ -20,18 +20,13 @@ internal static class LineParser
             return false;
         }
 
-        // Grammar is [+-]?[0-9]+; long.TryParse alone would also accept trailing NULs.
-        // The scan is a vectorised early-exit over the field, and TryParse then does the range check.
+        // Grammar is [+-]?[0-9]+. With these styles long.TryParse enforces all of it except
+        // that it ignores trailing NULs, so a final digit closes the gap without a second scan.
         ReadOnlySpan<byte> field = line[..separatorIndex];
-        ReadOnlySpan<byte> digits = field.Length > 0 && (field[0] is (byte)'+' or (byte)'-') ? field[1..] : field;
-        if (digits.IsEmpty || digits.IndexOfAnyExceptInRange((byte)'0', (byte)'9') >= 0)
+        if (!long.TryParse(field, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out number)
+            || !char.IsAsciiDigit((char)field[^1]))
         {
             number = 0;
-            return false;
-        }
-
-        if (!long.TryParse(field, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out number))
-        {
             return false;
         }
 
