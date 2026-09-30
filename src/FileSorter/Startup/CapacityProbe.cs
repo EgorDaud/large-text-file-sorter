@@ -78,11 +78,9 @@ internal static class CapacityProbe
             DriveInfo drive = new(root);
             return drive.IsReady ? drive.AvailableFreeSpace : null;
         }
-        catch (IOException)
-        {
-            return null;
-        }
-        catch (UnauthorizedAccessException)
+        // Windows DriveInfo accepts only a drive-letter root and throws ArgumentException
+        // for a UNC share, which is Unknown like any other unreadable volume.
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
             return null;
         }

@@ -192,6 +192,13 @@ internal static class CommandLine
             return false;
         }
 
+        // The merge opens the output with FileMode.Create, which would truncate the input.
+        if (RefersToSameFile(inputPath, outputPath))
+        {
+            error = "Input and output must be different files.";
+            return false;
+        }
+
         if (string.IsNullOrEmpty(tempDirectory))
         {
             tempDirectory = CapacityProbe.DirectoryOf(outputPath);
@@ -274,6 +281,23 @@ internal static class CommandLine
 
         options = new VerifyOptions(inputPath, outputPath, maxLineLength);
         return true;
+    }
+
+    // Windows and macOS volumes are case-insensitive by default. An unresolvable path is
+    // not a match, so the code that opens it keeps reporting it as before.
+    private static bool RefersToSameFile(string inputPath, string outputPath)
+    {
+        try
+        {
+            StringComparison comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(Path.GetFullPath(inputPath), Path.GetFullPath(outputPath), comparison);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException)
+        {
+            return false;
+        }
     }
 
     private static bool TryTakeValue(

@@ -46,6 +46,8 @@ At that size the sort produces a dozen or so runs — the count follows from you
 | `--seed` | 0 | The same seed reproduces byte-identical generator output |
 | `--duplicate-ratio` | 0.1 | Proportion of lines drawn to share a string part, measured over the whole file. `0` means none shares with any other; any positive ratio guarantees at least one shared pair |
 
+`<input>` and `<output>` must be different files: the same path, however it is spelled, is rejected as invalid arguments (exit 3) before anything is read or written. Symlinks and hard links to the input are not detected.
+
 `--memory` and `--max-line` are configurable because they make the expensive paths cheap to test: a small budget forces a multi-pass merge over a few kilobytes, a small line limit forces the oversized-line path on one screen.
 
 ### Exit codes
@@ -147,7 +149,7 @@ The assignment leaves several things unspecified. Each is decided here, identica
 | Area | Rule |
 |---|---|
 | Separator | The first period in the line, not the first period-then-space pair. One space immediately following is consumed if present; otherwise the string part starts at the next byte. |
-| Number | A signed 64-bit integer, full range. Negatives and leading zeros are accepted; a value outside the range is malformed, as are surrounding whitespace and an empty number field. |
+| Number | An optional `+` or `-` followed by one or more ASCII digits and nothing else, in the signed 64-bit range. Negatives and leading zeros are accepted; a value outside the range is malformed, as are surrounding whitespace, any other byte (including NUL) and an empty number field. |
 | Ordering | Three levels: string part ascending, ordinal over raw bytes; then number ascending; then raw line bytes ascending as a deterministic tie-break. |
 | Case | Ordinal and case-sensitive, so uppercase orders before lowercase. Culture-aware collation was rejected: it is not stable across machines or ICU versions, so the same input would sort differently on your machine than on mine, and could not be verified byte for byte. |
 | Encoding | Never validated. Input is assumed UTF-8 and the string part compared as opaque bytes, so invalid sequences pass through and order by their byte values. Validating would mean decoding every line on the hot path to reject inputs the ordering does not depend on. |

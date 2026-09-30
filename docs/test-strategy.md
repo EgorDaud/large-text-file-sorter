@@ -26,6 +26,7 @@ These decisions are locked. Every test case below assumes them, and the readme m
 | Empty input | Valid. Produces empty output and a success exit status, not an error. |
 | Startup capacity check | Free temporary space of roughly twice the input size is verified before any work begins; a shortfall fails immediately with a clear message. |
 | Test-facing knobs | Maximum line length and total memory budget are configurable, specifically so tests can force paths that would otherwise appear only at scale. |
+| Output path | Must not name the same file as the input, compared by full path (case-insensitive on Windows and macOS); the sorter rejects it as invalid arguments, exit 3, before reading or writing anything. Symlinks and hard links are not detected, and a case-sensitive macOS volume sees a false rejection for names differing only in case: an accepted trade-off against truncating the input. |
 | Sort stability | Not required and provably moot, because the third comparison level makes equality mean byte-identical. No test asserts it. |
 | Single run | When run generation produces exactly one run, that run is moved to the output path rather than read and rewritten. A move that fails because the temporary directory and the output path are on different volumes falls back to a copy. The temporary file survives neither path. |
 | Buffer hygiene | Buffers are not cleared on release. Consumers respect the recorded length, never the capacity, so residual bytes beyond the recorded length are never read. |
@@ -157,6 +158,8 @@ The boundary is the first period in the line. The number is a signed 64-bit inte
 | LP-21 | Preserves multi-byte content undecoded | A line whose string part contains non-ASCII characters | String extent covers the exact bytes, unchanged |
 | LP-22 | Passes invalid byte sequences through without validating | A line whose string part contains bytes that are not valid UTF-8 | Parses successfully; string extent covers the exact bytes; no failure and no substitution |
 | LP-25 | Produces an actionable diagnostic for a malformed line | A malformed line at a known byte offset well into a multi-line input, with an offending line far longer than the preview limit | The report names the byte offset, the line number, and the offending bytes truncated to the documented 128 bytes |
+| LP-26 | Rejects a number field outside the sign-and-ASCII-digits grammar | "12" followed by a NUL byte, a NUL before or inside the digits, a lone "+" or "-", "++1", "1+", and a space before or after the digits, each followed by ". x" | Malformed; a trailing NUL is not ignored as the BCL parser would |
+| LP-27 | Accepts every number field that matches the grammar | "-0", "+5", "007", the smallest signed 64-bit value, and a 25-digit value with leading zeros that fits the range | Each parses to its numeric value |
 
 The two maximum-line-length boundary cases belong to the splitter rather than to the parser, under D2: they are CB-16 and CB-12 in Unit 4. The identifiers LP-23 and LP-24 belong to no case and are not reused.
 
@@ -443,6 +446,7 @@ The descriptor overhead is easy to forget and is not negligible. A chunk of shor
 | MB-11 | Clamps the merge worker count by each of the three rules that can bind it | The shipped configuration at 4 GiB (the measured ceiling binds, and raising parallelism past it changes nothing); 1.5 GiB at the same pair (the window floor binds, one worker short of the next step); 4 GiB at parallelism 3 and at 1 (the operator's parallelism binds) | `MergeParallelism` is 8, 3, 3 and 1 respectively; the per-worker window never falls below `maxLineLength + 2`; `WorstCasePhaseTwoBytes` stays within the budget |
 | MB-12 | Falls back to one merge worker at a budget too small to grow the window | MB-01's own 2 MiB configuration; parallelism 4 at its own exact minimum viable budget, where the worker-count loop genuinely runs; parallelism 48 at ITS OWN minimum viable budget | `MergeParallelism` is 1, 1 and 2 respectively; each plan's `WorstCasePhaseTwoBytes` stays within its own budget |
 | MB-13 | Keeps phase two inside the budget, and the worker count monotone, across the range that adds workers | A sweep from 300 MiB to 4.25 GiB in 23 MiB steps at the shipped `--max-line`/assumed-mean pair, which crosses every worker-count transition from one to eight | At every point: phase two within the budget, fan-in at least two, per-worker window at or above its floor, and a worker count that never falls as the budget rises; the sweep reaches eight |
+| MB-14 | Clamps the chunk to the largest allocatable array | 64 GiB at parallelism 8; the exact budget at which the raw chunk reaches `Array.MaxLength`, one byte below it, and a little above it | `ChunkSize` is `Array.MaxLength` at and above the boundary and below it one byte under; phase one and phase two stay within the budget, so a large `--memory` never asks `BufferPool` for an array it cannot allocate |
 
 ---
 
@@ -571,6 +575,7 @@ Three tiers are specified here: property-based, integration, and streaming-layer
 | IT-06 | Sorting a file beginning with a byte order mark sorts correctly | A UTF-8 BOM, then several ordinary lines | Output matches the oracle; the mark is not part of the first line's number or string part |
 | IT-07 | The capacity precheck against the real temp volume reports Sufficient | `TempCapacity.Evaluate` fed a real `DriveInfo.AvailableFreeSpace` reading for the machine running the suite, against a trivially small input size | Outcome is `Sufficient` |
 | IT-08 | Placing a single run across two genuinely different volumes falls back to a copy | A small single-run input, `--temp` and the output path on two different real drive roots, detected and confirmed writable at run time | Exit 0; output correct; no leftover `run-*.tmp` in the temp directory |
+| IT-09 | The capacity precheck treats a UNC share as unknown instead of throwing | `CapacityProbe.CheckCapacity` given a UNC-shaped `--temp` and output directory (`\\nonexistent-host-for-test\share\sub`); Windows only, skipped elsewhere | Returns no exit code, so the sort proceeds; the stderr warning says free space could not be determined; no exception |
 
 ---
 
@@ -600,6 +605,20 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 | TR-02 | Two instances sharing the same requested parent use different private directories | Two `TemporaryRunSet`s constructed over the same directory | Their first run paths sit in two different directories, and are themselves different paths |
 | TR-03 | Constructing the set does not yet create a private directory | A single `TemporaryRunSet`, immediately after construction, before any run path is requested | The requested directory has no subdirectories yet |
 | TR-04 | Disposing removes the private directory even when the parent already existed | A pre-existing requested directory, one run file created and written | The requested directory survives; its private subdirectory does not |
+
+---
+
+### Command-line tests (CL)
+
+**Scope.** `tests/FileSorter.Tests/CommandLineTests.cs`. Its untraited cases cover option parsing and defaults; the cases below pin the input-and-output identity guard. They call `CommandLine.TryParseOptions` directly and touch no files.
+
+| ID | Test name | Input | Expected outcome |
+|---|---|---|---|
+| CL-01 | Rejects an output path identical to the input path | `data.txt data.txt` | Parsing fails; the error says the input and output must be different files |
+| CL-02 | Rejects a relative and an absolute form of the same file | `data.txt` with `Path.GetFullPath("data.txt")`, in both orders | Parsing fails with the same error |
+| CL-03 | Rejects a path that reaches the input through a parent segment | `data.txt` with `a/../data.txt` | Parsing fails with the same error |
+| CL-04 | Rejects paths that differ only in case where the file system ignores case | `Data.TXT data.txt` (Windows only; skipped elsewhere) | Parsing fails with the same error |
+| CL-05 | Accepts two different files | `in.txt out.txt`; `in.txt in.txt.sorted`; `data.txt` with `sorted/data.txt` | Parsing succeeds |
 
 ---
 
@@ -691,7 +710,7 @@ Even with that isolation the reading still climbs a little: 16.0, 17.5 and 22.5 
 | Memory management | BP-02, BP-04, BP-05, BP-06, BP-07, and BP-09 on the pool's ceiling and lifetime rules, and BP-10 on the recorded-length contract that replaces clearing. MB-04, MB-05, and MB-06 on the line-length floor, read-ahead, and descriptor overhead within one budget. CB-03 and CB-12 on the bounded carry-over, which is what makes the line-length limit load-bearing rather than cosmetic. KM-11 on incremental merge output. SC-01 through SC-06 on disk capacity, the resource the memory bound does not cover, and KM-14 on temporary files not surviving placement, which is the other half of that resource. The flat-working-set and tiny-budget tests from Part 1. |
 | Test coverage and reliability | Two hundred unit cases concentrated on the correctness-bearing core, with the property-based byte-identity tests (PB-01, PB-02) above them, each mutation-tested against `LineOrder.Compare` and confirmed to fail before being confirmed to pass again. Determinism assertions in OC-13, OC-14, CS-08, MB-08, GN-05, and PB-02. IT-01 through IT-06 pin the same oracle against real files. Stable identifiers tying every case back to this document. |
 | Multithreading and concurrency | BP-06 on ceiling adherence under concurrent pressure. The cross-parallelism output equality check on determinism under varying parallelism. MB-08 ensuring the plan itself does not vary with ambient machine state, which would make output vary too. The structural argument that the pool is the only shared mutable state in phase one and that phase two's merge workers share only an interlocked progress counter (design-spec 7.7). PB-12 and ET-03 on the partitioned merge agreeing byte for byte with the sequential one, at several worker counts. `RunGenerationStrategyTests` on bounded occupancy, release discipline, and exception identity across both strategies; SL-01 and SL-02 on backpressure demonstrated as genuinely blocking and on cancellation responsiveness within a stated bound; SL-03, SL-04 and SL-05 on a strategy having joined every spill it started before it returns, so that a failed or cancelled run has no worker still touching the reader, the pool or the temporary-run registry its caller is disposing. |
-| Thoughtful edge case handling | LP-02 through LP-25 on parsing, including both range boundaries and the diagnostic itself. CB-12 and CB-16 on both maximum-line-length boundaries, which live with the splitter rather than the parser under D2. CB-05 on the trailing region and CB-07, CB-08, CB-14, and CB-15 on carriage returns, the two cases that fail fast turns from cosmetic into fatal. OC-13 and OC-14 on the leading-zero tie that would otherwise make output budget-dependent. LP-22 and OC-16 on invalid encoding passing through by design. KM-05 through KM-09 on empty, unequal, and tied runs, and KM-13 on the cross-volume placement fallback that would otherwise fail at the very last step of a successful run. MP-02, MP-05, MP-06, and MP-08 on planner arithmetic. SC-03 and SC-05 on capacity boundaries. GN-02, GN-07, and GN-08 on the size boundary and degenerate targets. |
+| Thoughtful edge case handling | LP-02 through LP-27 on parsing, including both range boundaries and the diagnostic itself. CB-12 and CB-16 on both maximum-line-length boundaries, which live with the splitter rather than the parser under D2. CB-05 on the trailing region and CB-07, CB-08, CB-14, and CB-15 on carriage returns, the two cases that fail fast turns from cosmetic into fatal. OC-13 and OC-14 on the leading-zero tie that would otherwise make output budget-dependent. LP-22 and OC-16 on invalid encoding passing through by design. KM-05 through KM-09 on empty, unequal, and tied runs, and KM-13 on the cross-volume placement fallback that would otherwise fail at the very last step of a successful run. MP-02, MP-05, MP-06, and MP-08 on planner arithmetic. SC-03 and SC-05 on capacity boundaries. GN-02, GN-07, and GN-08 on the size boundary and degenerate targets. |
 
 ### Decisions
 

@@ -20,8 +20,13 @@ internal static class LineParser
             return false;
         }
 
-        if (!long.TryParse(line[..separatorIndex], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out number))
+        // Grammar is [+-]?[0-9]+. With these styles long.TryParse enforces all of it except
+        // that it ignores trailing NULs, so a final digit closes the gap without a second scan.
+        ReadOnlySpan<byte> field = line[..separatorIndex];
+        if (!long.TryParse(field, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out number)
+            || !char.IsAsciiDigit((char)field[^1]))
         {
+            number = 0;
             return false;
         }
 
