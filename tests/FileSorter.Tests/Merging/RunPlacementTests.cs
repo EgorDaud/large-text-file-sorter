@@ -1,23 +1,31 @@
 using FileSorter.Merging;
+using FileSorter.Startup;
 using Xunit;
 
 namespace FileSorter.Tests.Merging;
 
 // RunPlacement operates on file paths by nature — the seam it exists behind is tryMove,
 // not the file system — so these tests use a real scratch directory. No test arranges a
-// genuine second volume; the copy fallback is forced by a tryMove of (_, _) => false.
+// genuine second volume; the copy fallback is forced by a tryMove of (_, _) => false. In the
+// "Program" collection because KM-17 and KM-22 capture the process-wide Console.Error that
+// the sort tests also swap.
+[Collection("Program")]
 public sealed class RunPlacementTests : IDisposable
 {
     private readonly string _directory =
         Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
 
+    private readonly TemporaryRunSet _runs;
+
     public RunPlacementTests()
     {
         Directory.CreateDirectory(_directory);
+        _runs = new TemporaryRunSet(_directory);
     }
 
     public void Dispose()
     {
+        _runs.Dispose();
         if (Directory.Exists(_directory))
         {
             Directory.Delete(_directory, recursive: true);
@@ -40,7 +48,7 @@ public sealed class RunPlacementTests : IDisposable
         {
             File.Move(from, to);
             return true;
-        });
+        }, _runs);
 
         Assert.Equal(bytes, File.ReadAllBytes(outputPath));
         Assert.False(File.Exists(runPath));
@@ -56,7 +64,7 @@ public sealed class RunPlacementTests : IDisposable
         File.WriteAllBytes(runPath, bytes);
 
         Exception? thrown = Record.Exception(() =>
-            RunPlacement.Place(runPath, outputPath, (_, _) => false));
+            RunPlacement.Place(runPath, outputPath, (_, _) => false, _runs));
 
         Assert.Null(thrown);
         Assert.Equal(bytes, File.ReadAllBytes(outputPath));
@@ -68,9 +76,8 @@ public sealed class RunPlacementTests : IDisposable
     {
         // Windows-only reproduction: FileShare.Read alone permits the concurrent read
         // Place's own File.Copy performs, but denies the delete that follows once the
-        // destination has already been replaced. Place reports nothing about whether
-        // that replace happened, so a caller cannot mistake this failure -- which
-        // leaves a fully correct destination behind -- for one that leaves it partial.
+        // destination has already been replaced. That delete is best-effort, so Place
+        // neither throws nor leaves the destination partial.
         Assert.SkipUnless(OperatingSystem.IsWindows(), "FileShare-based delete denial is a Windows sharing-mode concept.");
 
         string runPath = Path.Combine(_directory, "run.tmp");
@@ -78,12 +85,64 @@ public sealed class RunPlacementTests : IDisposable
         byte[] bytes = [1, 2, 3, 4, 5];
         File.WriteAllBytes(runPath, bytes);
 
-        using (new FileStream(runPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        TextWriter originalError = Console.Error;
+        Console.SetError(new StringWriter());
+        try
         {
-            Assert.Throws<IOException>(() => RunPlacement.Place(runPath, outputPath, (_, _) => false));
+            using (new FileStream(runPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                Exception? thrown = Record.Exception(() => RunPlacement.Place(runPath, outputPath, (_, _) => false, _runs));
+                Assert.Null(thrown);
+            }
+        }
+        finally
+        {
+            Console.SetError(originalError);
         }
 
         Assert.Equal(bytes, File.ReadAllBytes(outputPath));
+    }
+
+    [Fact]
+    [Trait("Case", "KM-22")]
+    public void A_source_run_that_cannot_be_deleted_after_the_copy_fallback_warns_but_neither_fails_nor_leaks_the_run()
+    {
+        // A read-only attribute blocks File.Delete only on Windows; File.Copy and the
+        // final move are unaffected. It stands in for a scanner holding the finished run.
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "A read-only attribute blocks File.Delete only on Windows.");
+
+        string runPath = _runs.CreateRunPath();
+        string outputPath = Path.Combine(_directory, "output.tmp");
+        byte[] bytes = [1, 2, 3, 4, 5];
+        File.WriteAllBytes(runPath, bytes);
+        string? privateDirectory = Path.GetDirectoryName(runPath);
+        Assert.NotNull(privateDirectory);
+
+        TextWriter originalError = Console.Error;
+        StringWriter capturedError = new();
+        File.SetAttributes(runPath, FileAttributes.ReadOnly);
+        Console.SetError(capturedError);
+        try
+        {
+            Exception? thrown = Record.Exception(() => RunPlacement.Place(runPath, outputPath, (_, _) => false, _runs));
+            Assert.Null(thrown);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+            File.SetAttributes(runPath, FileAttributes.Normal);
+            File.SetAttributes(outputPath, FileAttributes.Normal);
+        }
+
+        // The output is complete, and the failed delete was reported by name.
+        Assert.Equal(bytes, File.ReadAllBytes(outputPath));
+        Assert.Contains(runPath, capturedError.ToString());
+        Assert.True(File.Exists(runPath));
+
+        // The run stays tracked, so Dispose retries it once the block is lifted.
+        _runs.Dispose();
+        Assert.False(File.Exists(runPath));
+        Assert.False(Directory.Exists(privateDirectory));
     }
 
     [Fact]
@@ -94,7 +153,7 @@ public sealed class RunPlacementTests : IDisposable
         string outputPath = Path.Combine(_directory, "output.tmp");
         File.WriteAllBytes(runPath, [1, 2, 3]);
 
-        RunPlacement.Place(runPath, outputPath, (_, _) => false);
+        RunPlacement.Place(runPath, outputPath, (_, _) => false, _runs);
 
         Assert.Empty(Directory.GetFiles(_directory, "*.partial"));
     }
@@ -109,7 +168,7 @@ public sealed class RunPlacementTests : IDisposable
         byte[] newContent = [1, 2, 3];
         File.WriteAllBytes(runPath, newContent);
 
-        RunPlacement.Place(runPath, outputPath, (_, _) => false);
+        RunPlacement.Place(runPath, outputPath, (_, _) => false, _runs);
 
         Assert.Equal(newContent, File.ReadAllBytes(outputPath));
     }
@@ -133,7 +192,7 @@ public sealed class RunPlacementTests : IDisposable
         using (new FileStream(outputPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
         {
             Assert.Throws<UnauthorizedAccessException>(
-                () => RunPlacement.Place(runPath, outputPath, (_, _) => false));
+                () => RunPlacement.Place(runPath, outputPath, (_, _) => false, _runs));
         }
 
         Assert.Equal(previousContent, File.ReadAllBytes(outputPath));
@@ -147,13 +206,13 @@ public sealed class RunPlacementTests : IDisposable
         string movedRun = Path.Combine(_directory, "moved.tmp");
         string movedOutput = Path.Combine(_directory, "moved-output.tmp");
         File.WriteAllBytes(movedRun, [1]);
-        RunPlacement.Place(movedRun, movedOutput, (from, to) => { File.Move(from, to); return true; });
+        RunPlacement.Place(movedRun, movedOutput, (from, to) => { File.Move(from, to); return true; }, _runs);
         Assert.False(File.Exists(movedRun));
 
         string copiedRun = Path.Combine(_directory, "copied.tmp");
         string copiedOutput = Path.Combine(_directory, "copied-output.tmp");
         File.WriteAllBytes(copiedRun, [2]);
-        RunPlacement.Place(copiedRun, copiedOutput, (_, _) => false);
+        RunPlacement.Place(copiedRun, copiedOutput, (_, _) => false, _runs);
         Assert.False(File.Exists(copiedRun));
     }
 }

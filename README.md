@@ -62,6 +62,8 @@ At that size the sort produces a dozen or so runs — the count follows from you
 | 5 | sorter | An I/O failure after startup validation passed, such as a full disk; one `I/O error:` line on stderr |
 | 130 | both | Cancelled |
 
+An unwritable destination exits 3 for empty or single-run input, where placement reports it as a destination that cannot be replaced, and 5 when a multi-run merge fails to open the output.
+
 The first Ctrl+C or SIGTERM cancels the run and exits 130 after cleanup; a second Ctrl+C ends the process immediately, without it. A cancelled generator removes its staging file. SIGHUP is not handled, so a run started under `nohup` outlives the session. Handled failures also run cleanup before exit; an abrupt termination cannot, and during a multi-run merge it can leave a partial destination file. Each phase reports progress and closing diagnostics on stderr.
 
 ---

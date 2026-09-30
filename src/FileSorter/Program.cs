@@ -189,6 +189,9 @@ internal static class Program
         MergeExecutor? executor = null;
         try
         {
+            // Honour a cancel that arrived after phase one, before any placement.
+            ct.ThrowIfCancellationRequested();
+
             if (runPaths.Count == 0)
             {
                 string staging = StagingFile.CreatePath(options.OutputPath);
@@ -218,7 +221,7 @@ internal static class Program
             {
                 try
                 {
-                    RunPlacement.Place(runPaths[0], options.OutputPath, tryMove);
+                    RunPlacement.Place(runPaths[0], options.OutputPath, tryMove, runs);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
