@@ -7,7 +7,9 @@ namespace FileSorter.Tests.Merging;
 
 // MergeExecutor is inherently a path-level type, so these tests use a real temp
 // directory: the claim that the planner's prediction matches what a real multi-pass run
-// does is not something a MemoryStream can stand in for.
+// does is not something a MemoryStream can stand in for. In the "Program" collection
+// because MP-11 captures the process-wide Console.Error that the sort tests also swap.
+[Collection("Program")]
 public sealed class MergeExecutorTests : IDisposable
 {
     private readonly string _directory =
@@ -77,6 +79,70 @@ public sealed class MergeExecutorTests : IDisposable
 
         // Per-group deletion is what this asserts indirectly: nothing survives in
         // the temp directory except the final output itself.
+        Assert.Equal([outputPath], Directory.GetFiles(_directory));
+    }
+
+    [Fact]
+    [Trait("Case", "MP-11")]
+    public async Task A_first_pass_run_that_cannot_be_deleted_during_a_multi_pass_merge_warns_but_neither_aborts_nor_leaks_the_run()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "A read-only attribute blocks File.Delete only on Windows.");
+
+        // Ten runs at a fan-in of three is the same multi-pass shape MP-10 drives. The
+        // first run is marked read-only before the merge starts: the merge still reads
+        // it, but its delete after the first group is refused, standing in for a scanner
+        // or indexer holding a finished run. A sharing-violation hold cannot be used,
+        // because the merge opens every run with FileShare.None and would be locked out
+        // of the run it is about to merge.
+        const int runCount = 10;
+        const int fanIn = 3;
+        Assert.True(MergePlanner.Plan(runCount, fanIn).Count >= 2);
+
+        TemporaryRunSet runs = new(_directory);
+        List<string> runPaths = [];
+        for (int i = 0; i < runCount; i++)
+        {
+            string path = runs.CreateRunPath();
+            File.WriteAllText(path, $"{i}. L{i:D2}\n");
+            runPaths.Add(path);
+        }
+
+        string lockedRun = runPaths[0];
+        string? privateDirectory = Path.GetDirectoryName(lockedRun);
+        Assert.NotNull(privateDirectory);
+
+        MergeExecutor executor = new(runs, PlanWith(fanIn, mergeParallelism: 1), maxLineLength: 63);
+        string outputPath = Path.Combine(_directory, "output.tmp");
+
+        TextWriter originalError = Console.Error;
+        StringWriter capturedError = new();
+        File.SetAttributes(lockedRun, FileAttributes.ReadOnly);
+        Console.SetError(capturedError);
+        try
+        {
+            await executor.ExecuteAsync(runPaths, outputPath, TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+            File.SetAttributes(lockedRun, FileAttributes.Normal);
+        }
+
+        // The sort completed and its output is right.
+        string[] expected = [.. Enumerable.Range(0, runCount).Select(i => $"{i}. L{i:D2}")];
+        Assert.Equal(expected, File.ReadAllText(outputPath).Split('\n', StringSplitOptions.RemoveEmptyEntries));
+
+        // The failed delete was reported once, by file name, and left the run behind.
+        string stderr = capturedError.ToString();
+        Assert.Contains(lockedRun, stderr);
+        Assert.Single(stderr.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries), line => line.Contains(lockedRun));
+        Assert.True(File.Exists(lockedRun));
+
+        // With the block lifted, Dispose retries the still-tracked run and the private
+        // directory, which is deleted non-recursively, goes with it.
+        runs.Dispose();
+        Assert.False(File.Exists(lockedRun));
+        Assert.False(Directory.Exists(privateDirectory));
         Assert.Equal([outputPath], Directory.GetFiles(_directory));
     }
 

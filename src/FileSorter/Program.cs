@@ -3,7 +3,6 @@ using System.Diagnostics.CodeAnalysis;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.Streams;
-using FileSorter.LineFormat;
 using FileSorter.Merging;
 using FileSorter.RunGeneration;
 using FileSorter.Startup;
@@ -45,45 +44,25 @@ internal static class Program
             return ExitCodes.InvalidArguments;
         }
 
-        using CancellationTokenSource cts = new();
+        return ConsoleRun.Run(async ct =>
+        {
+            try
+            {
+                return await RunAsync(options, ct);
+            }
+            catch (ArgumentOutOfRangeException ex) when (ex.ParamName == "budgetBytes")
+            {
+                // Report the minimum budget using CLI option names and units.
+                long minimum = MemoryBudget.MinimumViableBudget(
+                    options.Parallelism, options.MaxLineLength, AssumedMeanFor(options));
 
-        // Allow cancellation to unwind resource owners before the process exits.
-        ConsoleCancelEventHandler onCancel = (_, e) =>
-        {
-            e.Cancel = true;
-            cts.Cancel();
-        };
-        Console.CancelKeyPress += onCancel;
-
-        try
-        {
-            return RunAsync(options, cts.Token).GetAwaiter().GetResult();
-        }
-        catch (OperationCanceledException)
-        {
-            return ExitCodes.Cancelled;
-        }
-        catch (MalformedLineException ex)
-        {
-            Console.Error.WriteLine(ex.Message);
-            return ExitCodes.MalformedInput;
-        }
-        catch (ArgumentOutOfRangeException ex) when (ex.ParamName == "budgetBytes")
-        {
-            // Report the minimum budget using CLI option names and units.
-            long minimum = MemoryBudget.MinimumViableBudget(
-                options.Parallelism, options.MaxLineLength, AssumedMeanFor(options));
-
-            Console.Error.WriteLine(
-                $"A --memory budget of {ProgressReporter.Describe(options.MemoryBudgetBytes)} is too small. At --parallelism " +
-                $"{options.Parallelism} with --max-line {ProgressReporter.Describe(options.MaxLineLength)}, the sorter needs at " +
-                $"least {ProgressReporter.Describe(minimum)}.");
-            return ExitCodes.InvalidArguments;
-        }
-        finally
-        {
-            Console.CancelKeyPress -= onCancel;
-        }
+                Console.Error.WriteLine(
+                    $"A --memory budget of {ProgressReporter.Describe(options.MemoryBudgetBytes)} is too small. At --parallelism " +
+                    $"{options.Parallelism} with --max-line {ProgressReporter.Describe(options.MaxLineLength)}, the sorter needs at " +
+                    $"least {ProgressReporter.Describe(minimum)}.");
+                return ExitCodes.InvalidArguments;
+            }
+        });
     }
 
     [SuppressMessage(
@@ -210,6 +189,9 @@ internal static class Program
         MergeExecutor? executor = null;
         try
         {
+            // Honour a cancel that arrived after phase one, before any placement.
+            ct.ThrowIfCancellationRequested();
+
             if (runPaths.Count == 0)
             {
                 string staging = StagingFile.CreatePath(options.OutputPath);
@@ -239,7 +221,7 @@ internal static class Program
             {
                 try
                 {
-                    RunPlacement.Place(runPaths[0], options.OutputPath, tryMove);
+                    RunPlacement.Place(runPaths[0], options.OutputPath, tryMove, runs);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {

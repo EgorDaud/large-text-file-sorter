@@ -1,4 +1,3 @@
-using FileSorter.LineFormat;
 using FileSorter.Startup;
 
 namespace FileSorter.Verification;
@@ -16,31 +15,7 @@ internal static class VerifyCommand
             return ExitCodes.InvalidArguments;
         }
 
-        using CancellationTokenSource cts = new();
-        ConsoleCancelEventHandler onCancel = (_, e) =>
-        {
-            e.Cancel = true;
-            cts.Cancel();
-        };
-        Console.CancelKeyPress += onCancel;
-
-        try
-        {
-            return RunAsync(options, cts.Token).GetAwaiter().GetResult();
-        }
-        catch (OperationCanceledException)
-        {
-            return ExitCodes.Cancelled;
-        }
-        catch (MalformedLineException ex)
-        {
-            Console.Error.WriteLine(ex.Message);
-            return ExitCodes.MalformedInput;
-        }
-        finally
-        {
-            Console.CancelKeyPress -= onCancel;
-        }
+        return ConsoleRun.Run(ct => RunAsync(options, ct));
     }
 
     // Shared entry point for the CLI and end-to-end tests.

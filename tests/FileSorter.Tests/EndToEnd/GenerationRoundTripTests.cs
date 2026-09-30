@@ -22,7 +22,7 @@ public sealed class GenerationRoundTripTests
         LineComposer composer = new(options);
 
         using MemoryStream output = new();
-        FileWriter.Write(output, composer, targetBytes: 512 * 1024);
+        FileWriter.Write(output, composer, targetBytes: 512 * 1024, ct: TestContext.Current.CancellationToken);
         byte[] bytes = output.ToArray();
 
         Assert.NotEmpty(bytes);

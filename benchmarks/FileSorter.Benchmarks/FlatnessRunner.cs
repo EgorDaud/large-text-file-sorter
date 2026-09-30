@@ -248,7 +248,7 @@ internal static class FlatnessRunner
         }
         else if (runPaths.Count == 1)
         {
-            RunPlacement.Place(runPaths[0], outputPath, TryMove);
+            RunPlacement.Place(runPaths[0], outputPath, TryMove, runs);
         }
         else
         {

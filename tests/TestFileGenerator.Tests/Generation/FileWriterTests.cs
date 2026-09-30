@@ -17,7 +17,7 @@ public sealed class FileWriterTests
     {
         using MemoryStream sink = new();
 
-        long reported = FileWriter.Write(sink, GeneratedOutput.Composer(), TargetBytes);
+        long reported = FileWriter.Write(sink, GeneratedOutput.Composer(), TargetBytes, TestContext.Current.CancellationToken);
 
         Assert.Equal(sink.Length, reported);
     }
@@ -28,7 +28,7 @@ public sealed class FileWriterTests
         List<long> reports = [];
         using MemoryStream sink = new();
 
-        long written = FileWriter.Write(sink, GeneratedOutput.Composer(), TargetBytes, reports.Add);
+        long written = FileWriter.Write(sink, GeneratedOutput.Composer(), TargetBytes, TestContext.Current.CancellationToken, reports.Add);
 
         Assert.NotEmpty(reports);
         Assert.Equal(reports.Order(), reports);

@@ -1,11 +1,13 @@
+using FileSorter.Startup;
+
 namespace FileSorter.Merging;
 
 internal static class RunPlacement
 {
     // If a move cannot cross volumes, copy to a staging file beside outputPath, then move
     // it into place. A failure leaves outputPath unchanged or fully replaced. Delete the
-    // source last, so cleanup failure cannot leave a partial destination.
-    public static void Place(string runPath, string outputPath, Func<string, string, bool> tryMove)
+    // source last and best-effort, so cleanup failure cannot fail a completed placement.
+    public static void Place(string runPath, string outputPath, Func<string, string, bool> tryMove, TemporaryRunSet runs)
     {
         if (tryMove(runPath, outputPath))
         {
@@ -24,6 +26,6 @@ internal static class RunPlacement
             throw;
         }
 
-        File.Delete(runPath);
+        runs.Delete(runPath);
     }
 }

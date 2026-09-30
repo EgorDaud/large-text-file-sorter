@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using TestFileGenerator.Generation;
 
@@ -10,6 +11,7 @@ internal static class Program
 {
     private const int ExitSuccess = 0;
     private const int ExitInvalidArguments = 3;
+    private const int ExitCancelled = 130;
 
     private const double DefaultDuplicateRatio = 0.1;
 
@@ -64,16 +66,45 @@ internal static class Program
         Stopwatch clock = Stopwatch.StartNew();
         long nextReportMilliseconds = ProgressIntervalMilliseconds;
 
+        // Mirrors the sorter's ConsoleRun, duplicated because the programs share no project.
+        // The first Ctrl+C or SIGTERM cancels so the staging file is removed; a repeat ends
+        // the process at once.
+        using CancellationTokenSource cts = new();
+        bool BeginCancel()
+        {
+            if (cts.IsCancellationRequested)
+            {
+                return false;
+            }
+
+            cts.Cancel();
+            return true;
+        }
+
+        ConsoleCancelEventHandler onCancelKey = (_, e) => e.Cancel = BeginCancel();
+        Action<PosixSignalContext> onSignal = context => context.Cancel = BeginCancel();
+        // SIGHUP is left alone so a run started under nohup survives the session ending.
+        using PosixSignalRegistration terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, onSignal);
+        Console.CancelKeyPress += onCancelKey;
+
         long written;
         try
         {
-            written = WriteToOutput(options, composer, ReportProgress);
+            written = WriteToOutput(options, composer, ReportProgress, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return ExitCancelled;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Include the requested path in write failures.
             Console.Error.WriteLine($"Output file '{options.OutputPath}' could not be written: {ex.Message}");
             return ExitInvalidArguments;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= onCancelKey;
         }
 
         double seconds = clock.Elapsed.TotalSeconds;
@@ -212,7 +243,8 @@ internal static class Program
     }
 
     // Write beside the output and replace it only after a successful write.
-    internal static long WriteToOutput(GeneratorOptions options, LineComposer composer, Action<long> reportProgress)
+    internal static long WriteToOutput(
+        GeneratorOptions options, LineComposer composer, Action<long> reportProgress, CancellationToken ct)
     {
         string stagingPath = CreateStagingPath(options.OutputPath);
         try
@@ -222,7 +254,7 @@ internal static class Program
                 stagingPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 OutputBufferBytes, FileOptions.SequentialScan))
             {
-                written = FileWriter.Write(output, composer, options.TargetBytes, reportProgress);
+                written = FileWriter.Write(output, composer, options.TargetBytes, ct, reportProgress);
             }
 
             File.Move(stagingPath, options.OutputPath, overwrite: true);

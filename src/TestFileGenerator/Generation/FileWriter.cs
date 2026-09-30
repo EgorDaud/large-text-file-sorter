@@ -13,6 +13,7 @@ internal static class FileWriter
         Stream output,
         LineComposer composer,
         long targetBytes,
+        CancellationToken ct,
         Action<long>? onProgress = null)
     {
         ArgumentNullException.ThrowIfNull(output);
@@ -34,6 +35,9 @@ internal static class FileWriter
                 {
                     linesSinceReport = 0;
                     onProgress?.Invoke(written);
+
+                    // Polled with the progress report so the per-line loop stays free of it.
+                    ct.ThrowIfCancellationRequested();
                 }
             }
 

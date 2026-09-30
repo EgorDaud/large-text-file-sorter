@@ -210,9 +210,8 @@ public sealed class SortRoundTripTests : IDisposable
     public async Task Cancellation_unwinds_cleanly_with_no_leftover_temp_files()
     {
         // This exercises the CancellationToken plumbing through RunAsync, not the
-        // exit-130 mapping: that mapping lives in Main's own OperationCanceledException
-        // catch, and no OS-level Ctrl+C can be delivered to a process from inside a
-        // unit test.
+        // exit-130 mapping: that mapping lives in ConsoleRun (CR-04), and no OS-level
+        // Ctrl+C can be delivered to a process from inside a unit test.
         string inputPath = Path.Combine(_directory, "in.txt");
         string outputPath = Path.Combine(_directory, "out.txt");
         string tempDirectory = Path.Combine(_directory, "temp");
@@ -640,7 +639,7 @@ public sealed class SortRoundTripTests : IDisposable
         GeneratorOptions options = new(path, targetBytes, seed, DuplicateRatio: 0.2);
         LineComposer composer = new(options);
         using FileStream output = new(path, FileMode.Create, FileAccess.Write);
-        FileWriter.Write(output, composer, targetBytes);
+        FileWriter.Write(output, composer, targetBytes, TestContext.Current.CancellationToken);
     }
 
     // Checks both halves of the property independently of FileSorter.LineFormat: the
@@ -974,5 +973,42 @@ public sealed class SortRoundTripTests : IDisposable
         Assert.Contains(outputPath, stderr, StringComparison.Ordinal);
         Assert.True(Directory.Exists(outputPath));
         Assert.Empty(Directory.GetFiles(_directory, "*.partial"));
+    }
+
+    [Fact]
+    [Trait("Case", "ET-16")]
+    public void A_merge_that_cannot_open_its_destination_exits_5_through_ConsoleRun_with_no_stack_trace()
+    {
+        // The input is large enough to need a merge, which opens the output path itself,
+        // and an existing directory there makes that open fail on every platform. The
+        // empty and single-run shapes stage and move instead, so they report exit 3
+        // (ET-14, ET-15); only the merge is a genuine I/O failure after validation.
+        string inputPath = Path.Combine(_directory, "in.txt");
+        string outputPath = Path.Combine(_directory, "out.txt");
+        string tempDirectory = Path.Combine(_directory, "temp");
+        WriteGeneratedInput(inputPath, targetBytes: 1024 * 1024, seed: 7);
+        Directory.CreateDirectory(outputPath);
+
+        SorterOptions options = new(inputPath, outputPath, tempDirectory, 1_051_664, 256, Parallelism: 2, Pipeline.Channels);
+
+        TextWriter originalError = Console.Error;
+        StringWriter capturedError = new();
+        Console.SetError(capturedError);
+        int exitCode;
+        try
+        {
+            exitCode = ConsoleRun.Run(ct => Program.RunAsync(options, ct));
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        string stderr = capturedError.ToString();
+        Assert.Equal(5, exitCode);
+        Assert.Contains("I/O error: ", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("   at ", stderr, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(outputPath));
+        AssertNoLeftoverRunFiles(tempDirectory);
     }
 }

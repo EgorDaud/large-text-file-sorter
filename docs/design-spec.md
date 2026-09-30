@@ -37,10 +37,12 @@ No shared class library. The two programs share only the knowledge that the sepa
 
 ```
 FileSorter/
-  Program.cs                      dispatch (--help, --verify, sort mode), Ctrl+C wiring, the
-                                  exception-to-exit-code ladder, phase-two branch, ActorSystem lifetime
+  Program.cs                      dispatch (--help, --verify, sort mode), the budgetBytes
+                                  catch, phase-two branch, ActorSystem lifetime
   Startup/
     CommandLine.cs                argument parsing for both modes, and the size-suffix parser
+    ConsoleRun.cs                 Ctrl+C and SIGTERM wiring, and the exception-to-exit-code ladder
+                                  shared by sort and verify
     ExitCodes.cs                  the process exit code constants
     CapacityProbe.cs              output-directory and --temp validation, the free-space probe
     ProgressReporter.cs           the periodic stderr lines and the merge-shape summary
@@ -824,7 +826,7 @@ internal sealed class LineComposer
 internal static class FileWriter
 {
     public static long Write(
-        Stream output, LineComposer composer, long targetBytes, Action<long>? onProgress = null);
+        Stream output, LineComposer composer, long targetBytes, CancellationToken ct, Action<long>? onProgress = null);
 }
 ```
 
@@ -867,11 +869,12 @@ Defaults: `--memory 1GiB`, `--max-line 64KiB`, `--parallelism` = processor count
 | 2 | sorter | Insufficient temporary space, naming required, available, and the directory examined |
 | 3 | both | Invalid arguments; usage printed |
 | 4 | sorter | `--verify` found the output out of order, unterminated, or disagreeing with the input's count or hash |
-| 130 | sorter | Cancelled by the operator |
+| 5 | sorter | An I/O failure after startup validation passed, such as a full disk; one `I/O error:` line on stderr |
+| 130 | both | Cancelled by the operator or by SIGTERM |
 
-The generator has no cancellation code because `FileWriter.Write` is synchronous and takes no token; documenting 130 for a program that cannot return it would be a claim the code does not honour.
+Exit 3 keeps its meaning, including an unreplaceable destination: that failure is reported as an argument problem because the operator can fix it by choosing another path. Exit 5 covers the failures no argument caused. The sorter therefore exits 3 when an empty or single-run input cannot be placed at an unwritable destination, since placement wraps that as "cannot replace destination", and 5 when a merge's open of the output fails. The generator reports its own write failures as 3 and returns 130 when cancelled: `FileWriter.Write` polls the token with its progress report, and the write path deletes the staging file on the way out.
 
-Cancellation in the sorter: `Console.CancelKeyPress` cancels the token, every asynchronous method observes it, and D13 guarantees an `OperationCanceledException` reaches `Program` in the same shape under either strategy. `TemporaryRunSet.Dispose` runs on the way out, so cancellation leaves no temporary files — which holds only because a strategy has finished every spill it started by the time it returns (D16). Progress goes to stderr so stdout stays empty on success and the tool composes in a pipeline.
+Cancellation in the sorter: `ConsoleRun` cancels the token on the first `Console.CancelKeyPress` or SIGTERM (SIGHUP is left alone, so a sort under `nohup` survives the session ending) and leaves a second one unhandled, so the process terminates at once if cleanup hangs; the generator duplicates those few lines because the programs share no project. Every asynchronous method observes the token, and D13 guarantees an `OperationCanceledException` reaches `Program` in the same shape under either strategy. `TemporaryRunSet.Dispose` runs on the way out, so cancellation leaves no temporary files — which holds only because a strategy has finished every spill it started by the time it returns (D16). Progress goes to stderr so stdout stays empty on success and the tool composes in a pipeline.
 
 ---
 
@@ -920,7 +923,7 @@ Cancellation in the sorter: `Console.CancelKeyPress` cancels the token, every as
 | D12 | Every READ stream is opened `bufferSize: 1`; WRITE streams too, with a budgeted staging array (`SpillBufferSize`, `OutputBufferSize`) coalescing each line and its terminator instead. Phase two's buffers are allocated once in `MergeExecutor` and passed in | A `FileStream` buffer under an existing read-ahead buffer is unbudgeted work done twice. That argument is read-only: nothing buffers a write the way a read-ahead buffer buffers a read, so an unbuffered write stream alone would cost two syscalls per line. The staging buffer does that coalescing instead, which is what lets both sides stay unbuffered |
 | D13 | A strategy surfaces the first branch failure as the original exception, unwrapped; the streaming tier asserts exception-type identity across both | Otherwise `Parallel.ForEachAsync`'s `AggregateException` and Akka's fault route give the same corrupt file different exit codes. `await` unwraps the Channels path for free; it is Akka's materialized task that needs the explicit peel |
 | D14 | `Program` owns the single-run branch; `MergeExecutor` takes no `tryMove` | A parameter threaded two levels for one branch's benefit, and MP-05 already describes the single run as bypassing the merge entirely |
-| D15 | `FileWriter.Write` takes an optional `Action<long>? onProgress` | Progress on stderr is required for both programs, and with the cancellation token correctly absent this is the only sanctioned seam left. A hundred gigabytes is several silent minutes otherwise |
+| D15 | `FileWriter.Write` takes an optional `Action<long>? onProgress` | Progress on stderr is required for both programs; it is the seam the write loop reports through. A hundred gigabytes is several silent minutes otherwise. Amended: `Write` also takes a `CancellationToken`, polled with the progress report, so the generator can return 130 (see the exit-code prose) |
 | D16 | A strategy returns only once every read and every spill it started has finished, on every path; `AkkaRunGeneration` joins them behind a linked `CancellationTokenSource`, holding one `Task` field for the read and a count for the spills | `Parallel.ForEachAsync` gives `ChannelRunGeneration` this free, while Akka's materialized task completes at the fault with sibling spills still running — and the caller disposes the reader, the pool and the run registry the moment a strategy returns |
 
 Deliberately not done: `ChunkReader` is not split, because what remains after it delegates grammar, terminators and allocation is one job. No interface is introduced for `MergeExecutor`; MP-10 uses a real temporary directory instead. The chunk sort's `IComparer<T>` adapter is not shared with the merge, whose loser tree has nothing to hand an adapter to. The line grammar stays duplicated across the two programs rather than sharing a project, with GN-09 as the test that keeps them honest.

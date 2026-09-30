@@ -327,11 +327,12 @@ For testing, the merge must accept in-memory sorted sequences rather than requir
 | KM-14 | Leaves no temporary file behind on either placement path | Exactly one run, placed by move and again placed by copy | No temporary file remains in either case |
 | KM-15 | Writes lines longer than the output staging buffer directly, mid-run and at the end | A staging buffer too small to hold a legal maximum-length line; one over-length line mid-run, another as the run's very last line | Both lines land in the output correctly; the staging buffer's async fallback path (design-spec 7.3) is exercised without corrupting the lines around it |
 | KM-16 | A middle run's cursor failing to construct still disposes every run's stream | Three runs, the middle one given `RunCursorBuffers` that violate `RunCursor`'s own guard | The guard's exception propagates; every one of the three streams -- the one already wrapped in a cursor, the failing one, and the one never reached -- ends up disposed |
-| KM-17 | A run-file cleanup failure after a successful place leaves the replaced destination intact | The run file held open for read only (denying delete, not read), driven through the copy fallback | `File.Delete` throws `IOException`; the destination already holds the run's exact bytes |
+| KM-17 | A run-file cleanup failure after a successful place leaves the replaced destination intact | The run file held open for read only (denying delete, not read), driven through the copy fallback | `Place` does not throw, the failed delete being best-effort; the destination already holds the run's exact bytes |
 | KM-18 | Issues one stream read per window plus one that discovers end of stream | Fixed-width lines and a window sized to hold an exact number of lines with nothing carried over | Read count equals the number of windows plus one final read that returns empty |
 | KM-19 | Leaves no staging file behind after a successful copy fallback | Exactly one run, placed by the copy fallback | No `*.partial` file remains beside the output |
 | KM-20 | The copy fallback replaces an existing destination | Exactly one run, an output path that already holds different content | The output holds the run's exact bytes afterward |
 | KM-21 | A failed final move in the copy fallback leaves an existing destination untouched | An output path locked open for read with delete sharing, denying the write access the final move needs | The exception propagates; the destination's previous bytes are unchanged; only the staging file is removed |
+| KM-22 | A source run that cannot be deleted after the copy fallback warns but neither fails the placement nor leaks the run (Windows only) | A run created through a `TemporaryRunSet` and marked read-only, placed through the copy fallback | `Place` does not throw; the output holds the run's exact bytes; stderr names the run; the run is still on disk until `Dispose`, which retries and removes it and its private directory |
 
 ---
 
@@ -393,6 +394,7 @@ For testing, the merge must accept in-memory sorted sequences rather than requir
 | MP-08 | Never emits a group of size one | Run counts chosen so that naive division leaves a remainder of one, tested across several fan-in values | No group of size one in any pass; the odd run is either carried forward or absorbed into an under-full group |
 | MP-09 | Balances group sizes within a pass | A run count that does not divide evenly by the fan-in | Groups differ in size by at most one, rather than several full groups plus one nearly empty group |
 | MP-10 | Predicts a pass count matching actual execution | A run count and fan-in used both to plan and to drive a real merge over small in-memory runs | The number of passes actually executed equals the number predicted |
+| MP-11 | A first-pass run that cannot be deleted during a multi-pass merge warns but neither aborts the merge nor leaks the run (COR-5) | Ten runs at a fan-in of three; the first run marked read-only before the merge, so the merge still reads it but its delete is refused (`UnauthorizedAccessException`; a sharing hold would lock the merge out, since it opens runs with `FileShare.None`), and the attribute cleared afterwards; Windows only, skipped elsewhere | The merge completes with correct output; stderr names the held run exactly once; the run survives the merge; after the attribute is cleared and the set disposed, the run and its private directory are gone |
 
 **The planner never plans a pass it does not need.** MP-08 keeps it from emitting a group of size one, and MP-05 keeps it from emitting a pass at all when there is a single run. Both rules exist for the same reason: a pass that produces no ordering change still reads and rewrites every byte of the dataset. The single-run case is then handled by placement rather than by merging, which is specified with the merge in Unit 6.
 
@@ -512,6 +514,7 @@ That last point has a testing consequence worth stating: because generated numbe
 |---|---|---|---|
 | GW-01 | A successful write replaces an existing destination and leaves no staging file | An existing output holding unrelated stale content | The output holds the newly generated content; no `*.partial` file remains beside it |
 | GW-02 | A failed replace of a locked destination leaves it untouched and deletes only the staging file | An existing output held open for read with delete sharing, denying the write access the final move needs | The exception propagates; the previous output's bytes are unchanged; no `*.partial` file remains |
+| GW-03 | A cancelled write deletes the staging file and leaves an existing destination untouched (COR-7) | An existing output; a 4 MiB target; the token cancelled from the first progress callback | `OperationCanceledException` propagates (`Main` maps it to exit 130); the previous output's bytes are unchanged; no `*.partial` file remains |
 
 ---
 
@@ -605,6 +608,22 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 | TR-02 | Two instances sharing the same requested parent use different private directories | Two `TemporaryRunSet`s constructed over the same directory | Their first run paths sit in two different directories, and are themselves different paths |
 | TR-03 | Constructing the set does not yet create a private directory | A single `TemporaryRunSet`, immediately after construction, before any run path is requested | The requested directory has no subdirectories yet |
 | TR-04 | Disposing removes the private directory even when the parent already existed | A pre-existing requested directory, one run file created and written | The requested directory survives; its private subdirectory does not |
+| TR-05 | Deleting a run that is held open does not throw, and disposing removes it once released (COR-5) | One run file opened with `FileShare.Read`, then `Delete`; the handle released; then `Dispose`; Windows only, skipped elsewhere | `Delete` does not throw and the file still exists; after `Dispose` the file and its private directory are gone |
+
+---
+
+### Console run tests (CR)
+
+**Scope.** `tests/FileSorter.Tests/Startup/ConsoleRunTests.cs`, driving `ConsoleRun.Run` -- the wrapper `Main` and `VerifyCommand` share for Ctrl+C and SIGTERM wiring and the exception-to-exit-code ladder -- with bodies that throw. No real signal is delivered: the first-request-cancels and second-request-terminates policy is three lines of `CancelKeyPress` and `PosixSignalRegistration` plumbing that a test process cannot exercise without taking itself down, so only the mapping is pinned here, and the policy is checked by reading.
+
+| ID | Test name | Input | Expected outcome |
+|---|---|---|---|
+| CR-01 | A body's exit code passes through with a live token | A body returning 4 and recording `IsCancellationRequested` | Exit 4; the token was not cancelled |
+| CR-02 | An `IOException` maps to exit 5 with a one-line message | A body throwing `IOException("There is not enough space on the disk.")` | Exit 5; stderr is exactly `I/O error: There is not enough space on the disk.` |
+| CR-03 | An `UnauthorizedAccessException` maps to exit 5 with a one-line message | A body throwing `UnauthorizedAccessException("Access denied.")` | Exit 5; stderr is exactly `I/O error: Access denied.` |
+| CR-04 | An `OperationCanceledException` maps to exit 130 silently | A body throwing `OperationCanceledException` | Exit 130; stderr is empty |
+| CR-05 | A `MalformedLineException` maps to exit 1 printing its message unchanged | A body throwing `MalformedLineException` | Exit 1; stderr is exactly the exception's message |
+| CR-06 | An exception with no exit code propagates | A body throwing `InvalidOperationException` | The exception escapes `Run` |
 
 ---
 
@@ -643,6 +662,7 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 | ET-13 | A successful single-run sort still replaces an existing destination | A one-run input; an existing output holding unrelated stale content, not locked | Exit 0; the output holds the new sorted content; no `*.partial` file remains |
 | ET-14 | An empty-input sort reports a destination that is a directory by name and exits 3 | An empty input; an existing directory sitting at the output path | Exit 3; stderr names the output path; the directory is unchanged; no `*.partial` file remains |
 | ET-15 | A single-run sort reports a destination that is a directory by name and exits 3 | A one-run input; an existing directory sitting at the output path | Exit 3; stderr names the output path; the directory is unchanged; no `*.partial` file remains |
+| ET-16 | A merge that cannot open its destination exits 5 through `ConsoleRun` with no stack trace (COR-3) | A multi-run input (1 MiB at a 1,051,664-byte budget); an existing directory at the output path; driven through `ConsoleRun.Run(ct => Program.RunAsync(options, ct))` | Exit 5; stderr holds an `I/O error:` line and no stack frames; the directory is unchanged; no run file remains |
 
 ---
 
