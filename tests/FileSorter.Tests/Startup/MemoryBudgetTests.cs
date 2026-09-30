@@ -767,6 +767,57 @@ public sealed class MemoryBudgetTests
     }
 
     [Fact]
+    [Trait("Case", "MB-14")]
+    public void Never_plans_a_chunk_larger_than_the_largest_allocatable_array_at_a_huge_budget()
+    {
+        // budget=64 GiB, parallelism=8, maxLine=64 KiB, assumedMean=32 (the shipped
+        // arguments). The unclamped solve is
+        // spillRoom(8) = 68_719_476_736 - 8*65_536 = 68_718_952_448
+        // denom(8) = (8+2)*(32+32)+32 = 672
+        // rawChunkSize = floor(68_718_952_448*32/672) = 3_272_331_068,
+        // above Array.MaxLength (2_147_483_591), so the chunk is clamped to it. Clamping
+        // to int.MaxValue instead left a chunk that BufferPool and ChunkReader cannot
+        // allocate. The clamped plan costs less than the budget, so phase one still fits.
+        const long budget = 64L * 1024 * 1024 * 1024;
+        MemoryPlan plan = MemoryBudget.Calculate(
+            budgetBytes: budget, parallelism: 8, maxLineLength: 65_536, assumedMeanLineLength: 32);
+
+        Assert.Equal(Array.MaxLength, plan.ChunkSize);
+        Assert.True(plan.WorstCasePhaseOneBytes <= budget);
+        Assert.True(plan.WorstCasePhaseTwoBytes <= budget);
+    }
+
+    [Fact]
+    [Trait("Case", "MB-14")]
+    public void Clamps_the_chunk_to_the_largest_array_exactly_where_the_unclamped_chunk_would_exceed_it()
+    {
+        // parallelism=8, maxLine=64 KiB, assumedMean=32: rawChunkSize =
+        // floor(spillRoom*32/672) = floor(spillRoom/21), with
+        // spillRoom = budget - 8*65_536 = budget - 524_288.
+        // Array.MaxLength is 2_147_483_591, so the raw chunk first reaches it at
+        // spillRoom = 21*2_147_483_591 = 45_097_155_411, i.e. budget 45_097_679_699
+        // (just over 42 GiB). One byte below, spillRoom/21 floors to 2_147_483_590.
+        Assert.Equal(2_147_483_591, Array.MaxLength);
+        const long firstClampedBudget = 45_097_679_699;
+
+        MemoryPlan atBoundary = MemoryBudget.Calculate(
+            budgetBytes: firstClampedBudget, parallelism: 8, maxLineLength: 65_536, assumedMeanLineLength: 32);
+        MemoryPlan belowBoundary = MemoryBudget.Calculate(
+            budgetBytes: firstClampedBudget - 1, parallelism: 8, maxLineLength: 65_536, assumedMeanLineLength: 32);
+
+        // Ten chunk bytes further on, the raw chunk (2_147_483_601) is over the limit but
+        // still under int.MaxValue, so only a clamp to Array.MaxLength catches it.
+        MemoryPlan aboveBoundary = MemoryBudget.Calculate(
+            budgetBytes: firstClampedBudget + 21 * 10, parallelism: 8, maxLineLength: 65_536, assumedMeanLineLength: 32);
+        Assert.Equal(Array.MaxLength, aboveBoundary.ChunkSize);
+
+        Assert.Equal(2_147_483_591, atBoundary.ChunkSize);
+        Assert.Equal(2_147_483_590, belowBoundary.ChunkSize);
+        Assert.True(atBoundary.WorstCasePhaseOneBytes <= firstClampedBudget);
+        Assert.True(belowBoundary.WorstCasePhaseOneBytes <= firstClampedBudget - 1);
+    }
+
+    [Fact]
     [Trait("Case", "MB-08")]
     public void Produces_identical_plans_from_identical_inputs_across_repeated_calls()
     {

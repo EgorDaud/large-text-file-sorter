@@ -149,7 +149,10 @@ internal static class MemoryBudget
         long spillRoom = budgetBytes - (long)parallelism * SpillBufferSize;
         long denominator = (long)(parallelism + 2) * (assumedMeanLineLength + descriptorSize) + assumedMeanLineLength;
         long rawChunkSize = spillRoom <= 0 ? 0 : spillRoom * assumedMeanLineLength / denominator;
-        int chosenChunkSize = rawChunkSize > int.MaxValue ? int.MaxValue : (int)rawChunkSize;
+
+        // The chunk is one byte[] in BufferPool and ChunkReader, and the largest
+        // allocatable array is Array.MaxLength, a little below int.MaxValue.
+        int chosenChunkSize = rawChunkSize > Array.MaxLength ? Array.MaxLength : (int)rawChunkSize;
 
         // ChunkReader reserves maxLineLength + 2 bytes before prefetching, so the
         // chunk must hold at least one more byte. Compare in long to avoid overflow
