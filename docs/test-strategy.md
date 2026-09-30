@@ -513,6 +513,7 @@ That last point has a testing consequence worth stating: because generated numbe
 |---|---|---|---|
 | GW-01 | A successful write replaces an existing destination and leaves no staging file | An existing output holding unrelated stale content | The output holds the newly generated content; no `*.partial` file remains beside it |
 | GW-02 | A failed replace of a locked destination leaves it untouched and deletes only the staging file | An existing output held open for read with delete sharing, denying the write access the final move needs | The exception propagates; the previous output's bytes are unchanged; no `*.partial` file remains |
+| GW-03 | A cancelled write deletes the staging file and leaves an existing destination untouched (COR-7) | An existing output; a 4 MiB target; the token cancelled from the first progress callback | `OperationCanceledException` propagates (`Main` maps it to exit 130); the previous output's bytes are unchanged; no `*.partial` file remains |
 
 ---
 
@@ -610,6 +611,21 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 
 ---
 
+### Console run tests (CR)
+
+**Scope.** `tests/FileSorter.Tests/Startup/ConsoleRunTests.cs`, driving `ConsoleRun.Run` -- the wrapper `Main` and `VerifyCommand` share for Ctrl+C and SIGTERM wiring and the exception-to-exit-code ladder -- with bodies that throw. No real signal is delivered: the first-request-cancels and second-request-terminates policy is three lines of `CancelKeyPress` and `PosixSignalRegistration` plumbing that a test process cannot exercise without taking itself down, so only the mapping is pinned here, and the policy is checked by reading.
+
+| ID | Test name | Input | Expected outcome |
+|---|---|---|---|
+| CR-01 | A body's exit code passes through with a live token | A body returning 4 and recording `IsCancellationRequested` | Exit 4; the token was not cancelled |
+| CR-02 | An `IOException` maps to exit 5 with a one-line message | A body throwing `IOException("There is not enough space on the disk.")` | Exit 5; stderr is exactly `I/O error: There is not enough space on the disk.` |
+| CR-03 | An `UnauthorizedAccessException` maps to exit 5 with a one-line message | A body throwing `UnauthorizedAccessException("Access denied.")` | Exit 5; stderr is exactly `I/O error: Access denied.` |
+| CR-04 | An `OperationCanceledException` maps to exit 130 silently | A body throwing `OperationCanceledException` | Exit 130; stderr is empty |
+| CR-05 | A `MalformedLineException` maps to exit 1 printing its message unchanged | A body throwing `MalformedLineException` | Exit 1; stderr is exactly the exception's message |
+| CR-06 | An exception with no exit code propagates | A body throwing `InvalidOperationException` | The exception escapes `Run` |
+
+---
+
 ### Command-line tests (CL)
 
 **Scope.** `tests/FileSorter.Tests/CommandLineTests.cs`. Its untraited cases cover option parsing and defaults; the cases below pin the input-and-output identity guard. They call `CommandLine.TryParseOptions` directly and touch no files.
@@ -645,6 +661,7 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 | ET-13 | A successful single-run sort still replaces an existing destination | A one-run input; an existing output holding unrelated stale content, not locked | Exit 0; the output holds the new sorted content; no `*.partial` file remains |
 | ET-14 | An empty-input sort reports a destination that is a directory by name and exits 3 | An empty input; an existing directory sitting at the output path | Exit 3; stderr names the output path; the directory is unchanged; no `*.partial` file remains |
 | ET-15 | A single-run sort reports a destination that is a directory by name and exits 3 | A one-run input; an existing directory sitting at the output path | Exit 3; stderr names the output path; the directory is unchanged; no `*.partial` file remains |
+| ET-16 | A merge that cannot open its destination exits 5 through `ConsoleRun` with no stack trace (COR-3) | A multi-run input (1 MiB at a 1,051,664-byte budget); an existing directory at the output path; driven through `ConsoleRun.Run(ct => Program.RunAsync(options, ct))` | Exit 5; stderr holds an `I/O error:` line and no stack frames; the directory is unchanged; no run file remains |
 
 ---
 

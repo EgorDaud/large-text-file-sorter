@@ -46,7 +46,8 @@ internal static class CommandLine
           2    insufficient space on the temp or output volume (required, available and the directory examined, on stderr)
           3    invalid arguments; usage printed
           4    --verify found the output out of order, missing its final terminator, or disagreeing with the input's line count or hash
-          130  cancelled by the operator (Ctrl+C)
+          5    I/O failure after startup validation passed, such as a full disk (one line on stderr)
+          130  cancelled by the operator (Ctrl+C or SIGTERM)
         """;
 
     // Keep "B" last so it cannot shadow longer suffixes.

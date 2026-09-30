@@ -12,5 +12,8 @@ internal static class ExitCodes
     // arguments are valid even when output is unsorted or differs from input.
     public const int VerificationFailed   = 4;
 
+    // A read or write failed after startup validation passed, such as a full disk.
+    public const int IoFailure            = 5;
+
     public const int Cancelled            = 130;
 }

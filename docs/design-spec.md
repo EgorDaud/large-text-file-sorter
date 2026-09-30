@@ -37,10 +37,12 @@ No shared class library. The two programs share only the knowledge that the sepa
 
 ```
 FileSorter/
-  Program.cs                      dispatch (--help, --verify, sort mode), Ctrl+C wiring, the
-                                  exception-to-exit-code ladder, phase-two branch, ActorSystem lifetime
+  Program.cs                      dispatch (--help, --verify, sort mode), the budgetBytes
+                                  catch, phase-two branch, ActorSystem lifetime
   Startup/
     CommandLine.cs                argument parsing for both modes, and the size-suffix parser
+    ConsoleRun.cs                 Ctrl+C and SIGTERM wiring, and the exception-to-exit-code ladder
+                                  shared by sort and verify
     ExitCodes.cs                  the process exit code constants
     CapacityProbe.cs              output-directory and --temp validation, the free-space probe
     ProgressReporter.cs           the periodic stderr lines and the merge-shape summary
@@ -867,11 +869,12 @@ Defaults: `--memory 1GiB`, `--max-line 64KiB`, `--parallelism` = processor count
 | 2 | sorter | Insufficient temporary space, naming required, available, and the directory examined |
 | 3 | both | Invalid arguments; usage printed |
 | 4 | sorter | `--verify` found the output out of order, unterminated, or disagreeing with the input's count or hash |
-| 130 | sorter | Cancelled by the operator |
+| 5 | sorter | An I/O failure after startup validation passed, such as a full disk; one `I/O error:` line on stderr |
+| 130 | both | Cancelled by the operator or by SIGTERM |
 
-The generator has no cancellation code because `FileWriter.Write` is synchronous and takes no token; documenting 130 for a program that cannot return it would be a claim the code does not honour.
+Exit 3 keeps its meaning, including an unreplaceable destination: that failure is reported as an argument problem because the operator can fix it by choosing another path. Exit 5 covers the failures no argument caused. The generator reports its own write failures as 3 and returns 130 when cancelled: `FileWriter.Write` polls the token with its progress report, and the write path deletes the staging file on the way out.
 
-Cancellation in the sorter: `Console.CancelKeyPress` cancels the token, every asynchronous method observes it, and D13 guarantees an `OperationCanceledException` reaches `Program` in the same shape under either strategy. `TemporaryRunSet.Dispose` runs on the way out, so cancellation leaves no temporary files — which holds only because a strategy has finished every spill it started by the time it returns (D16). Progress goes to stderr so stdout stays empty on success and the tool composes in a pipeline.
+Cancellation in the sorter: `ConsoleRun` cancels the token on the first `Console.CancelKeyPress` or SIGTERM (SIGHUP is left alone, so a sort under `nohup` survives the session ending) and leaves a second one unhandled, so the process terminates at once if cleanup hangs; the generator duplicates those few lines because the programs share no project. Every asynchronous method observes the token, and D13 guarantees an `OperationCanceledException` reaches `Program` in the same shape under either strategy. `TemporaryRunSet.Dispose` runs on the way out, so cancellation leaves no temporary files — which holds only because a strategy has finished every spill it started by the time it returns (D16). Progress goes to stderr so stdout stays empty on success and the tool composes in a pipeline.
 
 ---
 

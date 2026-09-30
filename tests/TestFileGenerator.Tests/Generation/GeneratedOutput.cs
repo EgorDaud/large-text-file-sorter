@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using TestFileGenerator.Generation;
+using Xunit;
 
 namespace TestFileGenerator.Tests.Generation;
 
@@ -13,7 +14,7 @@ internal static class GeneratedOutput
     public static byte[] Write(long targetBytes, double duplicateRatio = 0.1, int seed = 1)
     {
         using MemoryStream sink = new();
-        FileWriter.Write(sink, Composer(seed, duplicateRatio), targetBytes);
+        FileWriter.Write(sink, Composer(seed, duplicateRatio), targetBytes, TestContext.Current.CancellationToken);
         return sink.ToArray();
     }
 

@@ -59,9 +59,10 @@ At that size the sort produces a dozen or so runs — the count follows from you
 | 2 | sorter | Insufficient space on the temp or output volume; required, available and the directory examined |
 | 3 | both | Invalid arguments, including an unreplaceable destination |
 | 4 | sorter | `--verify` found the output out of order, unterminated, or disagreeing with the input's line count or hash |
-| 130 | sorter | Cancelled |
+| 5 | sorter | An I/O failure after startup validation passed, such as a full disk; one `I/O error:` line on stderr |
+| 130 | both | Cancelled |
 
-Ctrl+C and handled failures run cleanup before exit; an abrupt termination cannot, and during a multi-run merge it can leave a partial destination file. Each phase reports progress and closing diagnostics on stderr.
+The first Ctrl+C or SIGTERM cancels the run and exits 130 after cleanup; a second Ctrl+C ends the process immediately, without it. A cancelled generator removes its staging file. SIGHUP is not handled, so a run started under `nohup` outlives the session. Handled failures also run cleanup before exit; an abrupt termination cannot, and during a multi-run merge it can leave a partial destination file. Each phase reports progress and closing diagnostics on stderr.
 
 ---
 
@@ -70,11 +71,11 @@ Ctrl+C and handled failures run cleanup before exit; an abrupt termination canno
 Vertical slices: every folder is named for a feature and holds everything that feature needs, so a change touches one folder. No folder is named for a technical layer.
 
 ```
-src/FileSorter/   Program.cs (dispatch, Ctrl+C, exit codes), Startup/ (arguments, budget
-                  arithmetic, free-space precheck, temp lifetime), LineFormat/ (parser,
-                  cursor, comparator), RunGeneration/ (chunk read, radix sort, spill,
-                  buffer pool, both pipelines), Merging/ (loser tree, splitters, pass
-                  planner, placement), Verification/ (--verify's two scans)
+src/FileSorter/   Program.cs (dispatch), Startup/ (arguments, budget arithmetic,
+                  free-space precheck, temp lifetime, Ctrl+C and exit codes), LineFormat/
+                  (parser, cursor, comparator), RunGeneration/ (chunk read, radix sort,
+                  spill, buffer pool, both pipelines), Merging/ (loser tree, splitters,
+                  pass planner, placement), Verification/ (--verify's two scans)
 src/TestFileGenerator/Generation/   vocabulary, line composition, writing
 tests/            mirrors the production folders, plus Integration/, EndToEnd/, Properties/
 benchmarks/       run generation, scheduler overhead, spill work, merge, partitioned merge
