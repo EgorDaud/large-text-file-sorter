@@ -1,4 +1,5 @@
 using BenchmarkDotNet.Running;
+using FileSorter.Startup;
 
 namespace FileSorter.Benchmarks;
 
@@ -18,10 +19,11 @@ internal static class Program
         }
 
         // Each input size uses a fresh worker process and passes its own budget.
-        if (args is ["--flatness-worker", string inputPath, string outputPath, string runsDirectory, string budgetArg])
+        if (args is ["--flatness-worker", string inputPath, string outputPath, string runsDirectory, string budgetArg, string pipelineArg])
         {
             long memoryBudgetBytes = long.Parse(budgetArg, System.Globalization.CultureInfo.InvariantCulture);
-            return await FlatnessRunner.RunWorkerAsync(inputPath, outputPath, runsDirectory, memoryBudgetBytes);
+            Pipeline pipeline = Enum.Parse<Pipeline>(pipelineArg, ignoreCase: true);
+            return await FlatnessRunner.RunWorkerAsync(inputPath, outputPath, runsDirectory, memoryBudgetBytes, pipeline);
         }
 
         // Avoid the interactive picker when no filter is supplied.

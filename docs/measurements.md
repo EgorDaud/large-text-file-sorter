@@ -233,7 +233,7 @@ Every range the descent enters on such input is a block of byte-identical keys �
 
 `-- --flatness` sorts roughly 1, 10, and 100 MiB of generated input at one fixed 16 MiB budget, **each size in its own freshly launched process**. That isolation is load-bearing: in one process the *previous* size's allocation churn inflates the *next* size's reading, which looks exactly like a leak that scales with input and is not one.
 
-Peak is the running maximum of `GC.GetTotalMemory(false)`, sampled on a 5 ms background timer throughout each sort, not a single read afterwards. The harness drives `ChannelRunGeneration` directly: it measures the memory claim, which is scheduler-independent, since both strategies are bound by the same buffer pool.
+Peak is the running maximum of `GC.GetTotalMemory(false)`, sampled on a 5 ms background timer throughout each sort, not a single read afterwards. The figures below are the earlier Channels-only run; as of 2026-09-30 the matrix drives both `ChannelRunGeneration` and `AkkaRunGeneration`, one freshly launched process per (size, pipeline), so a regression in the non-default pipeline is also caught (both are bound by the same buffer pool).
 
 | Input | Peak managed heap | Peak vs budget |
 |---|---|---|
@@ -242,6 +242,16 @@ Peak is the running maximum of `GC.GetTotalMemory(false)`, sampled on a 5 ms bac
 | 100 MiB | 22.54 MiB | +40.9% |
 
 Spread, largest peak over smallest: 41.2%, against a stated tolerance of 60%.
+
+Rerun on 2026-09-30 with both pipelines (`-- --flatness`, 16 MiB budget, `MergeParallelism` 1; input, output and run files on the D: drive):
+
+| Input | Channels peak | Channels vs budget | Akka peak | Akka vs budget |
+|---|---|---|---|---|
+| 1 MiB | 16.16 MiB | +1.0% | 16.55 MiB | +3.4% |
+| 10 MiB | 17.69 MiB | +10.5% | 17.96 MiB | +12.2% |
+| 100 MiB | 22.76 MiB | +42.2% | 23.07 MiB | +44.2% |
+
+Spread: 40.8% for Channels and 39.4% for Akka, both within the 60% tolerance. The Akka worker includes `ActorSystem` startup in its sampled window.
 
 **The climb is GC bookkeeping, not growth in the retained set.** The byte count immediately after `BufferPool` construction — the configured footprint the guarantee describes — is flat at roughly 15 MiB whatever the input size, checked directly. Generation budgets and segment counts grow with the *number* of collections a run triggers, which scales with chunk count at a fixed budget, not with what is retained.
 
@@ -254,4 +264,4 @@ Spread, largest peak over smallest: 41.2%, against a stated tolerance of 60%.
 | 100 MiB | 74.10 MiB | +15.8% |
 | 1 GiB | 82.26 MiB | +28.5% |
 
-A 28.6% spread against the same tolerance, tighter than the 16 MiB matrix's 41.2% — the partitioned path adds a small fixed amount of state on top of a larger floor, and its overshoot is the same GC residual. Both matrices are one recorded run, not a bound on every machine.
+A 28.6% spread against the same tolerance, tighter than the 16 MiB matrix's 41.2% — the partitioned path adds a small fixed amount of state on top of a larger floor, and its overshoot is the same GC residual. Both matrices are one recorded run, not a bound on every machine. Since 2026-09-30 `--flatness-parallel-merge` also runs each size under both pipelines, roughly doubling its runtime; the figures above predate that and cover Channels only.
