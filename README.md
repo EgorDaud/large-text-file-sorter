@@ -46,6 +46,8 @@ At that size the sort produces a dozen or so runs — the count follows from you
 | `--seed` | 0 | The same seed reproduces byte-identical generator output |
 | `--duplicate-ratio` | 0.1 | Proportion of lines drawn to share a string part, measured over the whole file. `0` means none shares with any other; any positive ratio guarantees at least one shared pair |
 
+`<input>` and `<output>` must be different files: the same path, however it is spelled, is rejected as invalid arguments (exit 3) before anything is read or written. Symlinks and hard links to the input are not detected.
+
 `--memory` and `--max-line` are configurable because they make the expensive paths cheap to test: a small budget forces a multi-pass merge over a few kilobytes, a small line limit forces the oversized-line path on one screen.
 
 ### Exit codes

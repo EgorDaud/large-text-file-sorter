@@ -26,6 +26,7 @@ These decisions are locked. Every test case below assumes them, and the readme m
 | Empty input | Valid. Produces empty output and a success exit status, not an error. |
 | Startup capacity check | Free temporary space of roughly twice the input size is verified before any work begins; a shortfall fails immediately with a clear message. |
 | Test-facing knobs | Maximum line length and total memory budget are configurable, specifically so tests can force paths that would otherwise appear only at scale. |
+| Output path | Must not name the same file as the input, compared by full path (case-insensitive on Windows and macOS); the sorter rejects it as invalid arguments, exit 3, before reading or writing anything. Symlinks and hard links are not detected, and a case-sensitive macOS volume sees a false rejection for names differing only in case: an accepted trade-off against truncating the input. |
 | Sort stability | Not required and provably moot, because the third comparison level makes equality mean byte-identical. No test asserts it. |
 | Single run | When run generation produces exactly one run, that run is moved to the output path rather than read and rewritten. A move that fails because the temporary directory and the output path are on different volumes falls back to a copy. The temporary file survives neither path. |
 | Buffer hygiene | Buffers are not cleared on release. Consumers respect the recorded length, never the capacity, so residual bytes beyond the recorded length are never read. |
@@ -604,6 +605,20 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 | TR-02 | Two instances sharing the same requested parent use different private directories | Two `TemporaryRunSet`s constructed over the same directory | Their first run paths sit in two different directories, and are themselves different paths |
 | TR-03 | Constructing the set does not yet create a private directory | A single `TemporaryRunSet`, immediately after construction, before any run path is requested | The requested directory has no subdirectories yet |
 | TR-04 | Disposing removes the private directory even when the parent already existed | A pre-existing requested directory, one run file created and written | The requested directory survives; its private subdirectory does not |
+
+---
+
+### Command-line tests (CL)
+
+**Scope.** `tests/FileSorter.Tests/CommandLineTests.cs`. Its untraited cases cover option parsing and defaults; the cases below pin the input-and-output identity guard. They call `CommandLine.TryParseOptions` directly and touch no files.
+
+| ID | Test name | Input | Expected outcome |
+|---|---|---|---|
+| CL-01 | Rejects an output path identical to the input path | `data.txt data.txt` | Parsing fails; the error says the input and output must be different files |
+| CL-02 | Rejects a relative and an absolute form of the same file | `data.txt` with `Path.GetFullPath("data.txt")`, in both orders | Parsing fails with the same error |
+| CL-03 | Rejects a path that reaches the input through a parent segment | `data.txt` with `a/../data.txt` | Parsing fails with the same error |
+| CL-04 | Rejects paths that differ only in case where the file system ignores case | `Data.TXT data.txt` (Windows only; skipped elsewhere) | Parsing fails with the same error |
+| CL-05 | Accepts two different files | `in.txt out.txt`; `in.txt in.txt.sorted`; `data.txt` with `sorted/data.txt` | Parsing succeeds |
 
 ---
 

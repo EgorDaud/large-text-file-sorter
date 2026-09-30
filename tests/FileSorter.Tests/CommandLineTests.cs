@@ -196,6 +196,61 @@ public sealed class CommandLineTests
     }
 
     [Fact]
+    [Trait("Case", "CL-01")]
+    public void Parsing_rejects_an_output_path_identical_to_the_input_path()
+    {
+        Assert.False(CommandLine.TryParseOptions(["data.txt", "data.txt"], out SorterOptions? options, out string? error));
+
+        Assert.Null(options);
+        Assert.Contains("different files", error);
+    }
+
+    [Fact]
+    [Trait("Case", "CL-02")]
+    public void Parsing_rejects_a_relative_and_an_absolute_form_of_the_same_file()
+    {
+        string absolute = Path.GetFullPath("data.txt");
+
+        Assert.False(CommandLine.TryParseOptions(["data.txt", absolute], out _, out string? error));
+        Assert.Contains("different files", error);
+
+        Assert.False(CommandLine.TryParseOptions([absolute, "data.txt"], out _, out error));
+        Assert.Contains("different files", error);
+    }
+
+    [Fact]
+    [Trait("Case", "CL-03")]
+    public void Parsing_rejects_a_path_that_reaches_the_input_through_a_parent_segment()
+    {
+        string detour = Path.Combine("a", "..", "data.txt");
+
+        Assert.False(CommandLine.TryParseOptions(["data.txt", detour], out _, out string? error));
+        Assert.Contains("different files", error);
+    }
+
+    [Fact]
+    [Trait("Case", "CL-04")]
+    public void Parsing_rejects_paths_that_differ_only_in_case_where_the_file_system_ignores_case()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Case-insensitive path comparison is applied on Windows and macOS only.");
+
+        Assert.False(CommandLine.TryParseOptions(["Data.TXT", "data.txt"], out _, out string? error));
+        Assert.Contains("different files", error);
+    }
+
+    [Theory]
+    [Trait("Case", "CL-05")]
+    [InlineData("in.txt", "out.txt")]
+    [InlineData("in.txt", "in.txt.sorted")]  // a prefix of the input's name is a different file
+    [InlineData("data.txt", "sorted/data.txt")]  // the same name in another directory
+    public void Parsing_accepts_two_different_files(string input, string output)
+    {
+        Assert.True(CommandLine.TryParseOptions([input, output], out SorterOptions? options, out _));
+
+        Assert.NotNull(options);
+    }
+
+    [Fact]
     public void Parsing_verify_options_with_only_the_positional_arguments_applies_the_documented_default()
     {
         Assert.True(CommandLine.TryParseVerifyOptions(
