@@ -416,7 +416,7 @@ public sealed class SortRoundTripTests : IDisposable
         Assert.True(sequentialRunCount >= 2, "the sequential shape must produce more than one run, or it is the single-run shortcut in disguise");
         Assert.Single(MergePlanner.Plan(sequentialRunCount, sequentialPlan.MergeFanIn));
 
-        // Genuine multi-pass, N = 1: MinimumViableBudget's reference plan is built at
+        // Genuine multi-pass, N = 1: The plan at the minimum viable budget has
         // exactly MergeFanIn = 2, the bare minimum a viable budget can give, so the
         // minimum itself with no margin is the one configuration where any run count
         // above two forces several passes. At parallelism 4 that minimum's chunk
@@ -786,7 +786,7 @@ public sealed class SortRoundTripTests : IDisposable
     [Trait("Case", "ET-09")]
     public async Task Sorting_forces_a_multi_pass_merge_and_leaves_no_private_directory_behind_on_success()
     {
-        // MinimumViableBudget's own reference plan pins MergeFanIn at MinMergeFanIn (2)
+        // The plan at the minimum viable budget pins MergeFanIn at MinMergeFanIn (2)
         // -- the bare minimum a viable budget can give -- so any run count above two
         // forces several merge passes rather than one, the same technique ET-04's own
         // multi-pass shape uses. The input needs to be large enough, at this budget's
@@ -1010,5 +1010,39 @@ public sealed class SortRoundTripTests : IDisposable
         Assert.DoesNotContain("   at ", stderr, StringComparison.Ordinal);
         Assert.True(Directory.Exists(outputPath));
         AssertNoLeftoverRunFiles(tempDirectory);
+    }
+
+    [Fact]
+    [Trait("Case", "ET-17")]
+    public void A_budget_too_small_to_plan_exits_3_naming_the_minimum_before_creating_anything()
+    {
+        string inputPath = Path.Combine(_directory, "in.txt");
+        string outputPath = Path.Combine(_directory, "out.txt");
+        string tempDirectory = Path.Combine(_directory, "temp");
+        File.WriteAllText(inputPath, "1. a\n");
+
+        SorterOptions options = new(inputPath, outputPath, tempDirectory, 1024 * 1024, 64 * 1024, Parallelism: 16, Pipeline.Channels);
+
+        TextWriter originalError = Console.Error;
+        StringWriter capturedError = new();
+        Console.SetError(capturedError);
+        int exitCode;
+        try
+        {
+            exitCode = ConsoleRun.Run(ct => Program.RunAsync(options, ct));
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        long minimum = MemoryBudget.MinimumViableBudget(16, 64 * 1024, 32);
+        Assert.Equal(3, exitCode);
+        Assert.Contains(
+            $"A --memory budget of 1.0 MiB is too small. At --parallelism 16 with --max-line 64.0 KiB, the sorter needs at least {ProgressReporter.Describe(minimum)}.",
+            capturedError.ToString(),
+            StringComparison.Ordinal);
+        Assert.False(File.Exists(outputPath));
+        Assert.False(Directory.Exists(tempDirectory));
     }
 }

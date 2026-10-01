@@ -44,25 +44,7 @@ internal static class Program
             return ExitCodes.InvalidArguments;
         }
 
-        return ConsoleRun.Run(async ct =>
-        {
-            try
-            {
-                return await RunAsync(options, ct);
-            }
-            catch (ArgumentOutOfRangeException ex) when (ex.ParamName == "budgetBytes")
-            {
-                // Report the minimum budget using CLI option names and units.
-                long minimum = MemoryBudget.MinimumViableBudget(
-                    options.Parallelism, options.MaxLineLength, AssumedMeanFor(options));
-
-                Console.Error.WriteLine(
-                    $"A --memory budget of {ProgressReporter.Describe(options.MemoryBudgetBytes)} is too small. At --parallelism " +
-                    $"{options.Parallelism} with --max-line {ProgressReporter.Describe(options.MaxLineLength)}, the sorter needs at " +
-                    $"least {ProgressReporter.Describe(minimum)}.");
-                return ExitCodes.InvalidArguments;
-            }
-        });
+        return ConsoleRun.Run(ct => RunAsync(options, ct));
     }
 
     [SuppressMessage(
@@ -97,7 +79,19 @@ internal static class Program
 
         // Keep the descriptor-size estimate within the configured line limit.
         int assumedMeanLineLength = AssumedMeanFor(options);
-        MemoryPlan plan = MemoryBudget.Calculate(options.MemoryBudgetBytes, options.Parallelism, options.MaxLineLength, assumedMeanLineLength);
+        if (!MemoryBudget.TryCalculate(
+                options.MemoryBudgetBytes, options.Parallelism, options.MaxLineLength, assumedMeanLineLength, out MemoryPlan plan))
+        {
+            // Report the minimum budget using CLI option names and units.
+            long minimum = MemoryBudget.MinimumViableBudget(
+                options.Parallelism, options.MaxLineLength, assumedMeanLineLength);
+
+            Console.Error.WriteLine(
+                $"A --memory budget of {ProgressReporter.Describe(options.MemoryBudgetBytes)} is too small. At --parallelism " +
+                $"{options.Parallelism} with --max-line {ProgressReporter.Describe(options.MaxLineLength)}, the sorter needs at " +
+                $"least {ProgressReporter.Describe(minimum)}.");
+            return ExitCodes.InvalidArguments;
+        }
 
         // Validate destinations before reading input or creating run files.
         string outputDirectory = CapacityProbe.DirectoryOf(options.OutputPath);

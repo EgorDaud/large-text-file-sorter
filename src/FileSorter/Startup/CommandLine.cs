@@ -10,14 +10,14 @@ internal static class CommandLine
     private const long DefaultMemoryBudgetBytes = 1L << 30;   // 1 GiB
     private const int  DefaultMaxLineLength     = 64 * 1024;  // 64 KiB
 
-    // Leave headroom for MemoryBudget's small buffer-floor offsets.
-    internal const long MaxLineLengthCeiling = int.MaxValue - 16;
+    // A chunk must exceed maxLine + 2 bytes yet fit one array, so no budget can satisfy a larger value.
+    internal static readonly long MaxLineLengthCeiling = Array.MaxLength - 3;
 
     // Verify allocates BaseBufferSize + maxLineLength per file, so its ceiling must
     // remain below Array.MaxLength. Derive it from OutputVerifier's buffer size.
     internal static readonly long VerifyMaxLineLengthCeiling = Array.MaxLength - OutputVerifier.BaseBufferSize;
 
-    internal const string Usage = """
+    internal static readonly string Usage = $"""
         Usage:
           sorter <input> <output> [--temp DIR] [--memory 1GiB] [--max-line 64KiB]
                                    [--parallelism N] [--pipeline akka|channels]
@@ -26,7 +26,7 @@ internal static class CommandLine
         Options:
           --temp         Directory for temporary run and merge files. Default: the output file's directory.
           --memory       Memory budget: a byte count, optionally suffixed B, KiB, MiB or GiB. Default 1GiB.
-          --max-line     Maximum line length: a byte count, optionally suffixed B, KiB, MiB or GiB. Default 64KiB, maximum 2147483631 (int.MaxValue - 16).
+          --max-line     Maximum line length: a byte count, optionally suffixed B, KiB, MiB or GiB. Default 64KiB, maximum {MaxLineLengthCeiling} (Array.MaxLength - 3).
           --parallelism  Degree of parallelism for phase one (run generation). Default: the processor count.
           --pipeline     Run-generation strategy, 'akka' or 'channels'. Default channels.
 
