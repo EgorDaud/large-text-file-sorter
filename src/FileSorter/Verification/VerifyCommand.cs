@@ -7,7 +7,7 @@ internal static class VerifyCommand
 {
     internal static int Execute(string[] args)
     {
-        if (!CommandLine.TryParseVerifyOptions(args, out VerifyOptions? options, out string? error))
+        if (!VerifyOptions.TryParse(args, out VerifyOptions? options, out string? error))
         {
             Console.Error.WriteLine(error);
             Console.Error.WriteLine();

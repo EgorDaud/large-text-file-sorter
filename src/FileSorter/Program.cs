@@ -229,10 +229,13 @@ internal static class Program
                 GC.Collect();
 
                 executor = new MergeExecutor(runs, plan, options.MaxLineLength);
-                await MergeDriver.RunPhaseTwoAsync(executor, runPaths, options.OutputPath, clock, ct);
+                await ProgressReporter.RunWithProgressAsync(
+                    progressCt => MergeReporter.ReportProgressAsync(executor, clock, progressCt),
+                    () => executor.ExecuteAsync(runPaths, options.OutputPath, ct),
+                    ct);
 
                 // Report actual workers: a multi-pass merge may use fewer than the plan allows.
-                ProgressReporter.ReportMergeShape(executor);
+                MergeReporter.ReportShape(executor);
                 Console.Error.WriteLine(
                     executor.Partition is { Workers: > 1 } partition
                         ? $"  merge waited {executor.OutputWaitSeconds:F1}s on output writes (summed across {partition.Workers} workers)"

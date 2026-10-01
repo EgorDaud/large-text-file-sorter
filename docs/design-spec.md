@@ -40,12 +40,13 @@ FileSorter/
   Program.cs                      dispatch (--help, --verify, sort mode), the budgetBytes
                                   catch, phase-two branch, ActorSystem lifetime
   Startup/
-    CommandLine.cs                argument parsing for both modes, and the size-suffix parser
+    CommandLine.cs                sort-mode argument parsing, and the size-suffix parser verify mode reuses
     ConsoleRun.cs                 Ctrl+C and SIGTERM wiring, and the exception-to-exit-code ladder
                                   shared by sort and verify
     ExitCodes.cs                  the process exit code constants
     CapacityProbe.cs              output-directory and --temp validation, the free-space probe
-    ProgressReporter.cs           the periodic stderr lines and the merge-shape summary
+    ProgressReporter.cs           the byte-count formatter, the reporting interval, and RunWithProgressAsync,
+                                  which runs a phase beside its periodic reporter
     SorterOptions.cs
     MemoryBudget.cs               MemoryPlan Calculate(...)
     MemoryPlan.cs
@@ -64,7 +65,8 @@ FileSorter/
     ChunkSorter.cs                descriptor sort
     ChunkSpiller.cs               sort, write run, release the pool slot
     RunGenerationStrategy.cs      the delegate, and ChunkSpill
-    RunGenerationDriver.cs        phase one's driver: builds the stream, pool, reader and spiller
+    RunGenerationDriver.cs        phase one's driver: builds the stream, pool, reader and spiller, and
+                                  owns the read-progress line
     AkkaRunGeneration.cs          implementation A
     ChannelRunGeneration.cs       implementation B
   Merging/
@@ -72,7 +74,7 @@ FileSorter/
     MergePass.cs
     MergeExecutor.cs              drives the passes, owns intermediate runs
     PartitionedMerge.cs           the partitioned path: workers over key ranges, PartitionStats
-    MergeDriver.cs                phase two's driver: the progress line around one ExecuteAsync
+    MergeReporter.cs              phase two's stderr lines: the progress line and the merge-shape summary
     RunCursor.cs
     RunCursorBuffers.cs           the two read-ahead windows and descriptor array per cursor
     KWayMerge.cs                  one group of runs into one output
@@ -84,7 +86,7 @@ FileSorter/
     OutputSliceStream.cs          one worker's write view of [start, end) of the output, guarded
     SparseFile.cs                 FSCTL_SET_SPARSE on the partitioned output, Windows only
   Verification/
-    VerifyOptions.cs
+    VerifyOptions.cs              the options record and --verify's own argument parsing and --max-line ceiling
     VerificationResult.cs         FileScanReport, VerificationOutcome
     OutputVerifier.cs             --verify: adjacent-order check plus count/hash agreement
     VerifyCommand.cs              --verify's driver
@@ -652,7 +654,10 @@ internal static class OutputVerifier
     public static Task<VerificationResult> RunAsync(VerifyOptions options, CancellationToken ct);
 }
 
-internal sealed record VerifyOptions(string InputPath, string OutputPath, int MaxLineLength);
+internal sealed record VerifyOptions(string InputPath, string OutputPath, int MaxLineLength)
+{
+    internal static bool TryParse(string[] args, out VerifyOptions? options, out string? error);
+}
 
 internal readonly record struct FileScanReport(long LineCount, long ByteCount, ulong Hash);
 

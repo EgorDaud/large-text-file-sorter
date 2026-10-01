@@ -28,35 +28,30 @@ internal static class RunGenerationDriver
         await using ChunkReader reader = new(input, pool, options.MaxLineLength);
         ChunkSpiller spiller = new(runs, plan.SpillBufferSize);
 
-        return await RunPhaseOneAsync(
-            reader, strategy, spiller.SpillAsync, plan.Parallelism, inputInfo.Length, clock, ct);
+        return await ProgressReporter.RunWithProgressAsync(
+            progressCt => ReportReadProgressAsync(reader, inputInfo.Length, clock, progressCt),
+            () => strategy(reader, spiller.SpillAsync, plan.Parallelism, ct),
+            ct);
     }
 
-    private static async Task<IReadOnlyList<string>> RunPhaseOneAsync(
-        ChunkReader reader,
-        RunGenerationStrategy strategy,
-        ChunkSpill spill,
-        int parallelism,
-        long inputSizeBytes,
-        Stopwatch clock,
-        CancellationToken ct)
+    // Phase one exposes only BytesConsumed. Supported 64-bit targets read its aligned
+    // long atomically, so reporting can read it directly.
+    private static async Task ReportReadProgressAsync(
+        ChunkReader reader, long inputSizeBytes, Stopwatch clock, CancellationToken ct)
     {
-        using CancellationTokenSource progressCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        Task progressTask = ProgressReporter.ReportReadProgressAsync(reader, inputSizeBytes, clock, progressCts.Token);
         try
         {
-            return await strategy(reader, spill, parallelism, ct);
+            while (true)
+            {
+                await Task.Delay(ProgressReporter.IntervalMilliseconds, ct);
+
+                long consumed = reader.BytesConsumed;
+                string ofTotal = inputSizeBytes > 0 ? $" of {ProgressReporter.Describe(inputSizeBytes)}" : string.Empty;
+                Console.Error.WriteLine($"  read {ProgressReporter.Describe(consumed)}{ofTotal} ({clock.Elapsed.TotalSeconds:F1}s)");
+            }
         }
-        finally
+        catch (OperationCanceledException)
         {
-            progressCts.Cancel();
-            try
-            {
-                await progressTask;
-            }
-            catch (OperationCanceledException)
-            {
-            }
         }
     }
 }

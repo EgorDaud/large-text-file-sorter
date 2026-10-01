@@ -49,6 +49,7 @@ Part 2 covers the unit tests. The property-based, integration and streaming-laye
 | Integration tests over the real file system (IT) | The line-format shapes the unit tier can only reach in memory, plus the cases that need a real environment: the capacity precheck against an actual volume (and a UNC share), and single-run placement across two actually different volumes | 9 | Seconds |
 | End-to-end and verify tests (ET, VF) | Whole runs through `Program.RunAsync` and `VerifyCommand.RunAsync`: budgets and merge shapes, destination failures, temp cleanup, and `--verify`'s own outcomes | 17 and 12 | Seconds to a minute |
 | Startup ownership tests (TR) | That a run's temporary files live in a private per-invocation directory which does not outlive the run | 5 | Milliseconds |
+| Progress-wrapper tests (PR) | That `ProgressReporter.RunWithProgressAsync` cancels and awaits its reporter however the work ends | 3 | Milliseconds |
 | Console-run and command-line tests (CR, CL) | That `Main`'s shared console wrapper maps outcomes to exit codes and messages, and that command-line parsing rejects an output path that names the input | 6 and 5 | Milliseconds |
 | Streaming-layer tests (SL) | Flow control, backpressure, deterministic resource release, error propagation across the fan-out | 5 | Seconds |
 | Benchmarks and manual verification | Throughput, allocation profile, real large-file behaviour | A handful, run on demand, never in the gate | Minutes to hours |
@@ -631,6 +632,18 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 | CR-04 | An `OperationCanceledException` maps to exit 130 silently | A body throwing `OperationCanceledException` | Exit 130; stderr is empty |
 | CR-05 | A `MalformedLineException` maps to exit 1 printing its message unchanged | A body throwing `MalformedLineException` | Exit 1; stderr is exactly the exception's message |
 | CR-06 | An exception with no exit code propagates | A body throwing `InvalidOperationException` | The exception escapes `Run` |
+
+---
+
+### Progress-wrapper tests (PR)
+
+**Scope.** `tests/FileSorter.Tests/Startup/ProgressReporterTests.cs`, driving `ProgressReporter.RunWithProgressAsync` -- the wrapper both phase drivers (and `Program`, for phase two) use to run work beside its periodic reporter -- with a stand-in reporter. The stand-in records whether it was started, cancelled and finished, and takes a moment to finish after cancellation, so it has finished by the time the call returns only if the wrapper awaited it. The real reporters' output is covered by the end-to-end tests' stderr assertions.
+
+| ID | Test name | Input | Expected outcome |
+|---|---|---|---|
+| PR-01 | The work result is returned and the reporter is cancelled and awaited afterwards | Work returning 42 after a yield | Returns 42; the reporter was running, uncancelled, while the work ran; afterwards it was cancelled and had finished |
+| PR-02 | A throwing work still cancels and awaits the reporter, and its exception propagates | Work faulting with `InvalidOperationException` | The same exception escapes; the reporter was cancelled and had finished |
+| PR-03 | The result-less overload cancels and awaits the reporter too | Work returning no value | The work ran; the reporter was cancelled and had finished |
 
 ---
 
