@@ -120,15 +120,14 @@ public sealed class CommandLineTests
     }
 
     [Theory]
-    [InlineData("2147483632")] // int.MaxValue - 15: one past the documented ceiling
+    [InlineData("2147483589")] // Array.MaxLength - 2: one past the documented ceiling
+    [InlineData("2147483631")] // int.MaxValue - 16, the former ceiling
     [InlineData("2147483647")] // int.MaxValue itself
     public void Parsing_rejects_a_max_line_value_above_the_documented_ceiling(string maxLine)
     {
-        // MemoryBudget adds small, fixed offsets (at most +3) to maxLineLength while
-        // computing buffer floors, and a value this close to int.MaxValue makes that
-        // addition wrap negative in plain int arithmetic, surfacing to the operator as
-        // a nonsensical negative minimum budget. The CLI rejects it before it ever
-        // reaches that arithmetic.
+        // A chunk must exceed maxLineLength + 2 bytes yet fit one array, so above
+        // Array.MaxLength - 3 no budget is viable, and the diagnostic would quote a
+        // minimum nobody can meet. Program turns this rejection into exit code 3.
         Assert.False(CommandLine.TryParseOptions(
             ["in.txt", "out.txt", "--max-line", maxLine], out SorterOptions? options, out string? error));
 
@@ -141,10 +140,10 @@ public sealed class CommandLineTests
     public void Parsing_accepts_a_max_line_value_exactly_at_the_documented_ceiling()
     {
         Assert.True(CommandLine.TryParseOptions(
-            ["in.txt", "out.txt", "--max-line", "2147483631"], out SorterOptions? options, out _)); // int.MaxValue - 16
+            ["in.txt", "out.txt", "--max-line", "2147483588"], out SorterOptions? options, out _)); // Array.MaxLength - 3
 
         Assert.NotNull(options);
-        Assert.Equal(int.MaxValue - 16, options.MaxLineLength);
+        Assert.Equal(Array.MaxLength - 3, options.MaxLineLength);
     }
 
     [Fact]

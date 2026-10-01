@@ -491,7 +491,7 @@ public sealed class MemoryBudgetTests
         // computing buffer floors. In plain int arithmetic that addition wraps negative
         // for a maxLineLength this close to int.MaxValue, and the diagnostic then quotes
         // a negative byte figure at the operator. --max-line's CLI ceiling
-        // (int.MaxValue - 16) keeps an operator from supplying a value this large; the
+        // (Array.MaxLength - 3) keeps an operator from supplying a value this large; the
         // guard inside MemoryBudget is the defence in depth for callers that bypass the
         // CLI, which is how MinimumViableBudget is called here.
         ArgumentOutOfRangeException ex = Assert.Throws<ArgumentOutOfRangeException>(
