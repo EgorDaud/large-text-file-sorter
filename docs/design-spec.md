@@ -732,6 +732,9 @@ internal static class MemoryBudget
 {
     public static MemoryPlan Calculate(
         long budgetBytes, int parallelism, int maxLineLength, int assumedMeanLineLength);
+
+    internal static bool TryCalculate(
+        long budgetBytes, int parallelism, int maxLineLength, int assumedMeanLineLength, out MemoryPlan plan);
 }
 ```
 
@@ -762,7 +765,7 @@ MergeFanIn   = min(MaxMergeFanIn,
 
 Three things follow. The window falls as `1/n`, so `N × MergeFanIn × bytesPerRunCursor` is unchanged by the worker count — **the parallelism is budget-neutral by construction, not by a second inequality something has to keep in step.** The extra `(N − 1) × OutputBufferSize` is subtracted *before* the window is solved, so it shaves the window rather than overshooting. And requiring the *solved* window to clear the floor on its own — rather than clamping it up as the one-worker case may — is exactly the condition "this budget affords `MaxMergeFanIn` cursors for each of these `n` workers": below it the fan-in, not the window, would pay for the extra worker, trading merge passes for parallelism on a run count the plan cannot know. So a budget too small to grow the window past its floor gets one worker and the sequential merge. `MaxMergeParallelism` is 8, from measurement rather than from the arithmetic: the floor clamp alone would admit 10 at a 4 GiB budget, and at 10 the per-worker window sits at the floor that measures 48.8 s against 38 s at 8.
 
-`phaseTwoViable` and `MinimumViableBudget` are both stated at **one** worker — not because no budget near the minimum chooses more (parallelism 48 at `--max-line` 64 gives two workers at its own minimum, which MB-12 walks through longhand), but because `phaseTwoViable` is computed once against the floor window's one-cursor cost before any worker-count decision is made, so neither it nor the chunk-size condition is a function of `MergeParallelism` at all. `MinimumViableBudget`'s reference plan builds the same one-worker figure, so the two stay exact inverses of each other. MB-11 through MB-13 cover the three clamps, the fall back to one worker, and a sweep across the budgets where the worker count climbs.
+`phaseTwoViable` and `MinimumViableBudget` are both stated at **one** worker — not because no budget near the minimum chooses more (parallelism 48 at `--max-line` 64 gives two workers at its own minimum, which MB-12 walks through longhand), but because `phaseTwoViable` is computed once against the floor window's one-cursor cost before any worker-count decision is made, so neither it nor the chunk-size condition is a function of `MergeParallelism` at all. `MemoryBudget.TryCalculate` is the single source of this algebra and returns false for an unviable budget (`Calculate` wraps it and throws `ArgumentOutOfRangeException`, which the CLI never sees: it checks `TryCalculate` and prints the minimum), and `MinimumViableBudget` is a bisection over `TryCalculate`, valid because viability is monotone in the budget (PB-21, PB-23), so the reported minimum is exact by construction rather than by a second equation kept in step. MB-11 through MB-13 cover the three clamps, the fall back to one worker, and a sweep across the budgets where the worker count climbs.
 
 **One resource is deliberately outside `MemoryPlan` and still a function of configuration alone: the chunk sort's stack.** `ChunkSorter` allocates its counting and cursor arrays with `stackalloc` — 258 and 257 `int`s, about 2 KiB, once per stack frame rather than once per level — precisely so a frame's stack use is not a function of how many depths the split guard walked, and recursion is bounded by the depth cap.
 

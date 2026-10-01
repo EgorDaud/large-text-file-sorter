@@ -24,8 +24,27 @@ internal static class MemoryBudget
     // Larger spill buffers have not improved the smaller concurrent run-file writes.
     private const int SpillBufferSize = 64 * 1024;
 
+    // Throws for a budget that cannot support the other arguments, naming the minimum
+    // that can. Use TryCalculate to test viability without an exception.
     public static MemoryPlan Calculate(
         long budgetBytes, int parallelism, int maxLineLength, int assumedMeanLineLength)
+    {
+        if (TryCalculate(budgetBytes, parallelism, maxLineLength, assumedMeanLineLength, out MemoryPlan plan))
+        {
+            return plan;
+        }
+
+        long minimumBudget = MinimumViableBudget(parallelism, maxLineLength, assumedMeanLineLength);
+        throw new ArgumentOutOfRangeException(nameof(budgetBytes), budgetBytes,
+            $"A memory budget of {budgetBytes} bytes cannot support a chunk larger than the maximum line " +
+            $"length ({maxLineLength} bytes) and a merge fan-in of at least {MinMergeFanIn}, at parallelism " +
+            $"{parallelism}. The minimum viable budget is {minimumBudget} bytes.");
+    }
+
+    // The single source of the budget algebra. Returns false when the budget cannot
+    // support the other arguments; arguments that are invalid whatever the budget still throw.
+    internal static bool TryCalculate(
+        long budgetBytes, int parallelism, int maxLineLength, int assumedMeanLineLength, out MemoryPlan plan)
     {
         if (parallelism <= 0)
         {
@@ -56,8 +75,7 @@ internal static class MemoryBudget
         long floorBytesPerRunCursor =
             2L * floorReadAheadBufferSize + (long)floorDescriptorCapacity * descriptorSize;
 
-        // Charge loser-tree storage per cursor so this boundary matches the reference
-        // plan used by MinimumViableBudget.
+        // Charge loser-tree storage per cursor, as the merge does at run time.
         long floorBytesPerFanInSlot = floorBytesPerRunCursor + MemoryPlan.LoserTreeBytesPerFanInSlot;
 
         long fanInRoom = budgetBytes - OutputBufferSize;
@@ -119,14 +137,6 @@ internal static class MemoryBudget
         long BytesPerRunCursor(long readAhead) =>
             2L * readAhead + (readAhead / assumedMeanLineLength) * descriptorSize;
 
-        // floor(R/m)*D <= (R/m)*D makes the continuous solution conservative.
-        // Check the discrete cost here to guard future changes to the formula.
-        while (window > floorReadAheadBufferSize
-               && (long)mergeParallelism * MaxMergeFanIn * (BytesPerRunCursor(window) + MemoryPlan.LoserTreeBytesPerFanInSlot) > mergeRoom)
-        {
-            window--;
-        }
-
         int readAheadBufferSize = (int)window;
         int readAheadDescriptorCapacity = (int)(window / assumedMeanLineLength);
 
@@ -159,16 +169,13 @@ internal static class MemoryBudget
         // for direct callers near int.MaxValue.
         if ((long)chosenChunkSize <= (long)maxLineLength + 2 || !phaseTwoViable)
         {
-            long minimumBudget = MinimumViableBudget(parallelism, maxLineLength, assumedMeanLineLength);
-            throw new ArgumentOutOfRangeException(nameof(budgetBytes), budgetBytes,
-                $"A memory budget of {budgetBytes} bytes cannot support a chunk larger than the maximum line " +
-                $"length ({maxLineLength} bytes) and a merge fan-in of at least {MinMergeFanIn}, at parallelism " +
-                $"{parallelism}. The minimum viable budget is {minimumBudget} bytes.");
+            plan = default;
+            return false;
         }
 
         int descriptorCapacity = chosenChunkSize / assumedMeanLineLength;
 
-        MemoryPlan plan = new(
+        plan = new(
             ChunkSize: chosenChunkSize,
             DescriptorCapacity: descriptorCapacity,
             Parallelism: parallelism,
@@ -179,83 +186,35 @@ internal static class MemoryBudget
             SpillBufferSize: SpillBufferSize,
             MergeParallelism: mergeParallelism);
 
-        // Check the constructed plan independently of the solve. Flooring the chunk
-        // and descriptor counts should make this loop unnecessary.
-        while (plan.WorstCasePhaseOneBytes > budgetBytes && (long)plan.ChunkSize > (long)maxLineLength + 3)
-        {
-            int shrunk = plan.ChunkSize - 1;
-            plan = plan with { ChunkSize = shrunk, DescriptorCapacity = shrunk / assumedMeanLineLength };
-        }
-
-        // Recheck phase two through MemoryPlan so formula changes cannot silently
-        // exceed the budget or reduce fan-in below the planner's minimum.
-        while (plan.WorstCasePhaseTwoBytes > budgetBytes && plan.MergeFanIn > MinMergeFanIn)
-        {
-            plan = plan with { MergeFanIn = plan.MergeFanIn - 1 };
-        }
-
-        // Reject an invalid plan if shrinking to the minimum fan-in was insufficient.
-        if (plan.WorstCasePhaseTwoBytes > budgetBytes)
-        {
-            throw new InvalidOperationException(
-                $"Internal invariant violated: the constructed plan's phase-two worst case " +
-                $"({plan.WorstCasePhaseTwoBytes} bytes) exceeds the budget ({budgetBytes} bytes).");
-        }
-
-        if (plan.MergeFanIn < MinMergeFanIn)
-        {
-            throw new InvalidOperationException(
-                $"Internal invariant violated: the constructed plan's merge fan-in ({plan.MergeFanIn}) is " +
-                $"below the minimum MergePlanner accepts ({MinMergeFanIn}).");
-        }
-
-        return plan;
+        return true;
     }
 
-    // Shared by Calculate and CLI diagnostics to keep the reported minimum exact.
+    // The smallest budget for which TryCalculate succeeds, found by bisection. Viability
+    // is monotone in the budget (property tests PB-21 and PB-23), which is what makes
+    // bisection valid. The low bound is the output buffer: any budget up to it leaves no
+    // room for a merge cursor, so it is surely unviable. The high bound, 2^50 bytes,
+    // exceeds the budget needed at the CLI's --max-line ceiling (Array.MaxLength - 3) up
+    // to a parallelism of about 250,000. Where nothing is viable (a line limit above that
+    // ceiling), the search ends at the high bound, so the result is always positive.
     internal static long MinimumViableBudget(int parallelism, int maxLineLength, int assumedMeanLineLength)
     {
-        int outputBufferSize = OutputBufferSize;
+        long unviable = OutputBufferSize;
+        long viable = 1L << 50;
 
-        // Use the requested phase-one parallelism and minimum viable buffers.
-        // ChunkReader needs maxLineLength + 2 reserved bytes plus one fresh byte;
-        // RunCursor folds known carry in place and needs only maxLineLength + 2 total.
-        int chunkSize = AddOffsetChecked(maxLineLength, 3);
-        int descriptorCapacity = chunkSize / assumedMeanLineLength;
-        int readAheadBufferSize = AddOffsetChecked(maxLineLength, 2);
-        int readAheadDescriptorCapacity = readAheadBufferSize / assumedMeanLineLength;
+        while (viable - unviable > 1)
+        {
+            long middle = unviable + (viable - unviable) / 2;
+            if (TryCalculate(middle, parallelism, maxLineLength, assumedMeanLineLength, out _))
+            {
+                viable = middle;
+            }
+            else
+            {
+                unviable = middle;
+            }
+        }
 
-        MemoryPlan reference = new(
-            ChunkSize: chunkSize,
-            DescriptorCapacity: descriptorCapacity,
-            Parallelism: parallelism,
-            MergeFanIn: MinMergeFanIn,
-            ReadAheadBufferSize: readAheadBufferSize,
-            ReadAheadDescriptorCapacity: readAheadDescriptorCapacity,
-            OutputBufferSize: outputBufferSize,
-            SpillBufferSize: SpillBufferSize,
-            // Match Calculate's viability test, which uses one worker at the floor window.
-            MergeParallelism: 1);
-
-        // Phase two's reference cost is exact. Phase one needs the inverse of the
-        // continuous solve: paying for the discrete reference plan can still produce
-        // a floored chunk size one byte too small.
-        long phaseOneMinimum = PhaseOneMinimumFor(parallelism, chunkSize, assumedMeanLineLength);
-
-        return Math.Max(phaseOneMinimum, reference.WorstCasePhaseTwoBytes);
-    }
-
-    // Invert Calculate's phase-one solve to find the smallest budget that yields
-    // requiredChunkSize. Keep this equation aligned with Calculate.
-    private static long PhaseOneMinimumFor(int parallelism, int requiredChunkSize, int assumedMeanLineLength)
-    {
-        long denominator = (long)(parallelism + 2) * (assumedMeanLineLength + MemoryPlan.DescriptorSize) + assumedMeanLineLength;
-        long numerator = (long)requiredChunkSize * denominator;
-
-        // Round up so Calculate's floored chunk size reaches requiredChunkSize.
-        long budgetAboveSpillBuffers = (numerator + assumedMeanLineLength - 1) / assumedMeanLineLength;
-
-        return (long)parallelism * SpillBufferSize + budgetAboveSpillBuffers;
+        return viable;
     }
 
     // Check the addition before narrowing so direct callers cannot get a wrapped

@@ -1011,4 +1011,38 @@ public sealed class SortRoundTripTests : IDisposable
         Assert.True(Directory.Exists(outputPath));
         AssertNoLeftoverRunFiles(tempDirectory);
     }
+
+    [Fact]
+    [Trait("Case", "ET-17")]
+    public void A_budget_too_small_to_plan_exits_3_naming_the_minimum_before_creating_anything()
+    {
+        string inputPath = Path.Combine(_directory, "in.txt");
+        string outputPath = Path.Combine(_directory, "out.txt");
+        string tempDirectory = Path.Combine(_directory, "temp");
+        File.WriteAllText(inputPath, "1. a\n");
+
+        SorterOptions options = new(inputPath, outputPath, tempDirectory, 1024 * 1024, 64 * 1024, Parallelism: 16, Pipeline.Channels);
+
+        TextWriter originalError = Console.Error;
+        StringWriter capturedError = new();
+        Console.SetError(capturedError);
+        int exitCode;
+        try
+        {
+            exitCode = ConsoleRun.Run(ct => Program.RunAsync(options, ct));
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        long minimum = MemoryBudget.MinimumViableBudget(16, 64 * 1024, 32);
+        Assert.Equal(3, exitCode);
+        Assert.Contains(
+            $"A --memory budget of 1.0 MiB is too small. At --parallelism 16 with --max-line 64.0 KiB, the sorter needs at least {ProgressReporter.Describe(minimum)}.",
+            capturedError.ToString(),
+            StringComparison.Ordinal);
+        Assert.False(File.Exists(outputPath));
+        Assert.False(Directory.Exists(tempDirectory));
+    }
 }

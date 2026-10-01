@@ -667,6 +667,7 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 | ET-14 | An empty-input sort reports a destination that is a directory by name and exits 3 | An empty input; an existing directory sitting at the output path | Exit 3; stderr names the output path; the directory is unchanged; no `*.partial` file remains |
 | ET-15 | A single-run sort reports a destination that is a directory by name and exits 3 | A one-run input; an existing directory sitting at the output path | Exit 3; stderr names the output path; the directory is unchanged; no `*.partial` file remains |
 | ET-16 | A merge that cannot open its destination exits 5 through `ConsoleRun` with no stack trace (COR-3) | A multi-run input (1 MiB at a 1,051,664-byte budget); an existing directory at the output path; driven through `ConsoleRun.Run(ct => Program.RunAsync(options, ct))` | Exit 5; stderr holds an `I/O error:` line and no stack frames; the directory is unchanged; no run file remains |
+| ET-17 | A `--memory` too small to plan exits 3 naming the minimum, before creating anything (KISS-1) | A one-line input; 1 MiB at parallelism 16 and the default `--max-line` | Exit 3; stderr carries the exact "is too small … needs at least" message with `MinimumViableBudget`'s figure; no output file and no temp directory exist |
 
 ---
 

@@ -71,7 +71,7 @@ public sealed class MemoryBudgetPropertyTests
             (int parallelism, int maxLineLength, long budget) = scenario;
             long minimum = MemoryBudget.MinimumViableBudget(parallelism, maxLineLength, AssumedMeanFor(maxLineLength));
 
-            // The binary search that is meant to replace the closed-form minimum assumes
+            // MinimumViableBudget is a binary search over TryCalculate, which assumes
             // viability is monotone, so this checks both the edge and a drawn budget on
             // either side of it, rather than only that the edge is where it should be.
             Assert.True(
