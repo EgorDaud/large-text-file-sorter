@@ -1,5 +1,4 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Text;
 using FileSorter.LineFormat;
 
 namespace FileSorter.Verification;
@@ -12,8 +11,6 @@ namespace FileSorter.Verification;
 // and must end every line with LF.
 internal static class OutputVerifier
 {
-    private const int PreviewMaxBytes = 128;
-
     // Each scan reserves this much read space plus maxLineLength bytes for carry.
     // CommandLine also uses this constant to calculate the largest valid --max-line.
     internal const int BaseBufferSize = 4 * 1024 * 1024;
@@ -139,8 +136,8 @@ internal static class OutputVerifier
                 {
                     violation = new OrderViolation(
                         lineNumber,
-                        PreviewOf(previousLine!, previousDescriptor.Offset, previousDescriptor.Length),
-                        PreviewOf(source, offset, length));
+                        MalformedLineException.PreviewOf(previousLine.AsSpan(previousDescriptor.Offset, previousDescriptor.Length)),
+                        MalformedLineException.PreviewOf(source.AsSpan(offset, length)));
                     return;
                 }
 
@@ -206,7 +203,7 @@ internal static class OutputVerifier
                     {
                         // Output must end in LF. Accepting an unterminated tail would hide truncation.
                         unterminated = new UnterminatedOutput(
-                            lineNumber, blockBaseOffset + carryOffset, PreviewOf(buffer, carryOffset, carryLength));
+                            lineNumber, blockBaseOffset + carryOffset, MalformedLineException.PreviewOf(buffer.AsSpan(carryOffset, carryLength)));
                     }
                     else
                     {
@@ -244,23 +241,13 @@ internal static class OutputVerifier
 
     private static LineDescriptor Describe(byte[] buffer, int offset, int length, long fileOffsetOfBufferZero, long lineNumber)
     {
-        ReadOnlySpan<byte> line = buffer.AsSpan(offset, length);
-        if (!LineParser.TryParse(line, out long number, out int stringStart))
+        if (!LineDescriptor.TryCreate(buffer, offset, length, out LineDescriptor descriptor))
         {
-            ReadOnlySpan<byte> preview = line.Length > PreviewMaxBytes ? line[..PreviewMaxBytes] : line;
-            throw new MalformedLineException(fileOffsetOfBufferZero + offset, lineNumber, Encoding.UTF8.GetString(preview));
+            throw new MalformedLineException(
+                fileOffsetOfBufferZero + offset, lineNumber, MalformedLineException.PreviewOf(buffer.AsSpan(offset, length)));
         }
 
-        int stringOffset = offset + stringStart;
-        int stringLength = LineDescriptor.StringLengthOf(offset, length, stringOffset);
-        ulong prefix = LineDescriptor.BuildPrefix(buffer.AsSpan(stringOffset, stringLength));
-        return new LineDescriptor(prefix, number, offset, length, stringOffset);
-    }
-
-    private static string PreviewOf(byte[] buffer, int offset, int length)
-    {
-        int previewLength = Math.Min(length, PreviewMaxBytes);
-        return Encoding.UTF8.GetString(buffer, offset, previewLength);
+        return descriptor;
     }
 
     private static async Task<int> FillAsync(Stream stream, byte[] buffer, int offset, int count, CancellationToken ct)

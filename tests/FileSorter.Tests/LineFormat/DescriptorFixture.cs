@@ -17,16 +17,12 @@ internal static class DescriptorFixture
 
         while (cursor.TryReadLine(out int offset, out int length))
         {
-            ReadOnlySpan<byte> line = buffer.AsSpan(offset, length);
-            if (!LineParser.TryParse(line, out long number, out int stringStart))
+            if (!LineDescriptor.TryCreate(buffer, offset, length, out LineDescriptor descriptor))
             {
                 throw new FormatException($"Line at offset {offset} does not match the settled grammar.");
             }
 
-            int stringOffset = offset + stringStart;
-            int stringLength = LineDescriptor.StringLengthOf(offset, length, stringOffset);
-            ulong prefix = LineDescriptor.BuildPrefix(buffer.AsSpan(stringOffset, stringLength));
-            descriptors.Add(new LineDescriptor(prefix, number, offset, length, stringOffset));
+            descriptors.Add(descriptor);
         }
 
         return descriptors;

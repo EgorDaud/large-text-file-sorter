@@ -127,6 +127,7 @@ internal readonly struct LineDescriptor
     public int Length => (int)_offsetAndLength;           // raw line length, terminators excluded
     public int StringLength => StringLengthOf(Offset, Length, StringOffset);
 
+    public static bool TryCreate(byte[] buffer, int offset, int length, out LineDescriptor descriptor);
     public static int StringLengthOf(int offset, int length, int stringOffset);
     public static ulong BuildPrefix(ReadOnlySpan<byte> stringPart);
 }
@@ -134,7 +135,7 @@ internal readonly struct LineDescriptor
 
 Thirty-two bytes, no reference field, so an array of descriptors is one contiguous block and sorting reorders only descriptors — the buffer is never rearranged and no line is copied or decoded on the hot path. `Offset` and `Length` share one packed field to buy *field count*, not bytes: a five-field version measured out to the same thirty-two bytes but ran 40% slower on the in-memory merge, because RyuJIT's struct promotion stops at four fields. `MemoryPlan` reads the size via `Unsafe.SizeOf` rather than a constant, so the budget stays correct if a field is added.
 
-`StringOffset` is stored rather than recomputed; the alternative is a sixteen-byte descriptor that rescans for the separator on every comparison. `Prefix` caches the first eight bytes of the string part so most comparisons never touch the buffer, and `BuildPrefix` is the one place that layout is produced, called by `ChunkReader.Describe`, `RunCursor.Describe` and the test fixtures alike, so a descriptor's prefix cannot disagree with its bytes. A packed twenty-four-byte layout is not possible: leading zeros are accepted in the number, so the distance from line start to string start is unbounded and does not fit a byte.
+`StringOffset` is stored rather than recomputed; the alternative is a sixteen-byte descriptor that rescans for the separator on every comparison. `Prefix` caches the first eight bytes of the string part so most comparisons never touch the buffer, and `BuildPrefix` is the one place that layout is produced and `LineDescriptor.TryCreate` is the one place a descriptor is built from a line (parse, string extent, prefix). `ChunkReader`, `RunCursor`, `RangePartitioner`, `OutputVerifier` and the test fixtures all go through it, each keeping only its own choice of exception, so a descriptor's prefix cannot disagree with its bytes. A packed twenty-four-byte layout is not possible: leading zeros are accepted in the number, so the distance from line start to string start is unbounded and does not fit a byte.
 
 `Offset` and `StringOffset` are absolute into the chunk buffer, assigned after the carry-over copy, so a carried fragment's descriptor is written once against its final position.
 
@@ -670,7 +671,7 @@ internal sealed record VerificationResult(
 
 Exists so a result too large for a second full sort to compare against can be checked from the shipped binary, with the same comparator the sort uses rather than a second reading of the format that could drift.
 
-Two fixed buffers of `4 MiB + maxLineLength`, stated directly rather than derived from a `MemoryBudget`-style plan, since verification has nothing to sort and needs only head room to carry one partial line across a fill. Both files are read once, forward, as two tasks awaited together. The output scan requires every adjacent pair non-decreasing: each line is parsed into a `LineDescriptor` exactly as `ChunkReader.Describe` does and compared against the previous line's descriptor, which is kept in **a small array of its own** — that copy is what lets the comparison survive the previous line's window being overwritten by the next fill, the same reason `KWayMerge`'s invariant never lets a comparison read a window mid-refill.
+Two fixed buffers of `4 MiB + maxLineLength`, stated directly rather than derived from a `MemoryBudget`-style plan, since verification has nothing to sort and needs only head room to carry one partial line across a fill. Both files are read once, forward, as two tasks awaited together. The output scan requires every adjacent pair non-decreasing: each line is parsed into a `LineDescriptor` exactly as `LineDescriptor.TryCreate` does and compared against the previous line's descriptor, which is kept in **a small array of its own** — that copy is what lets the comparison survive the previous line's window being overwritten by the next fill, the same reason `KWayMerge`'s invariant never lets a comparison read a window mid-refill.
 
 Both scans compute the wrapping sum of FNV-1a 64 over every line's content bytes. The input scan strips a `\r\n` line's `\r` exactly as `LineCursor` strips it for the sort; the output scan does not, because this sorter's output is `\n`-terminated throughout and a `\r` before one there is always content. The two hashes are comparable *because* of that asymmetry rather than in spite of it: a byte the input scan struck as a terminator's own half is exactly the byte the sort carried into the output as content.
 

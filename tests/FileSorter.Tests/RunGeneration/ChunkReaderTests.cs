@@ -299,7 +299,7 @@ public sealed class ChunkReaderTests
         // The diagnostic is assembled here rather than in LineParser, which reports only
         // that a line is malformed and knows neither where it sat nor which line it was.
         // The preview length is what is untested elsewhere and what this case exists for:
-        // five slices of the sorter each carry their own PreviewMaxBytes = 128, and an
+        // the 128-byte limit lives in MalformedLineException.PreviewOf, and an
         // untruncated preview turns one hostile line into a 64 KiB stderr message. Every
         // well-formed line here is five bytes, so line 6 starts at byte 25.
         const int previewMaxBytes = 128;

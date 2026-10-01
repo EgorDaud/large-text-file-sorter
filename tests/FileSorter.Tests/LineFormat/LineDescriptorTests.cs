@@ -97,6 +97,37 @@ public sealed class LineDescriptorTests
     }
 
     [Fact]
+    [Trait("Case", "CM-10")]
+    public void Creating_a_descriptor_from_a_valid_line_records_its_number_extent_and_prefix()
+    {
+        byte[] buffer = "xx\n-5. Apple pie\nyy"u8.ToArray();
+        const int offset = 3;
+        const int length = 13; // "-5. Apple pie"
+
+        bool created = LineDescriptor.TryCreate(buffer, offset, length, out LineDescriptor descriptor);
+
+        Assert.True(created);
+        Assert.Equal(-5, descriptor.Number);
+        Assert.Equal(offset, descriptor.Offset);
+        Assert.Equal(length, descriptor.Length);
+        Assert.Equal(offset + 4, descriptor.StringOffset);
+        Assert.Equal(9, descriptor.StringLength);
+        Assert.Equal(LineDescriptor.BuildPrefix("Apple pie"u8), descriptor.Prefix);
+    }
+
+    [Fact]
+    [Trait("Case", "CM-10")]
+    public void Creating_a_descriptor_from_a_malformed_line_returns_false()
+    {
+        byte[] buffer = "ok\nabc\n"u8.ToArray();
+
+        bool created = LineDescriptor.TryCreate(buffer, offset: 3, length: 3, out LineDescriptor descriptor);
+
+        Assert.False(created);
+        Assert.Equal(default, descriptor);
+    }
+
+    [Fact]
     [Trait("Case", "CM-02")]
     public async Task Sorting_a_reverse_ordered_chunk_leaves_the_underlying_bytes_untouched()
     {
@@ -173,16 +204,12 @@ public sealed class LineDescriptorTests
         LineCursor cursor = new(slot.Bytes.AsSpan(0, buffer.Length), 64 * 1024);
         while (cursor.TryReadLine(out int offset, out int length))
         {
-            ReadOnlySpan<byte> line = slot.Bytes.AsSpan(offset, length);
-            if (!LineParser.TryParse(line, out long number, out int stringStart))
+            if (!LineDescriptor.TryCreate(slot.Bytes, offset, length, out LineDescriptor descriptor))
             {
                 throw new FormatException($"Line at offset {offset} does not match the settled grammar.");
             }
 
-            int stringOffset = offset + stringStart;
-            int stringLength = LineDescriptor.StringLengthOf(offset, length, stringOffset);
-            ulong prefix = LineDescriptor.BuildPrefix(slot.Bytes.AsSpan(stringOffset, stringLength));
-            slot.Lines[count++] = new LineDescriptor(prefix, number, offset, length, stringOffset);
+            slot.Lines[count++] = descriptor;
         }
 
         return new Chunk(slot, count);

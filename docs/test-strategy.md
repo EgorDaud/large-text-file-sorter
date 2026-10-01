@@ -165,7 +165,7 @@ The boundary is the first period in the line. The number is a signed 64-bit inte
 
 The two maximum-line-length boundary cases belong to the splitter rather than to the parser, under D2: they are CB-16 and CB-12 in Unit 4. The identifiers LP-23 and LP-24 belong to no case and are not reused.
 
-LP-25 lives in `ChunkReaderTests` rather than `LineParserTests`, for the same kind of reason and worth stating rather than leaving as an oddity. `LineParser` reports only *that* a line is malformed; it is handed one line's bytes and knows neither where that line sat in the file nor which line it was, so the diagnostic named in the contract table is assembled by whichever reader was holding the offset -- `ChunkReader` on the input, `RunCursor` and `RangePartitioner` on run files, `OutputVerifier` on the output. That spread is itself what the case is for: each of those five carries its own `PreviewMaxBytes` constant, so the 128-byte truncation is a rule stated in five places and, until LP-25, asserted in none. An untruncated preview is not a cosmetic defect under fail-fast -- one hostile line turns the error message into 64 KiB of stderr.
+LP-25 lives in `ChunkReaderTests` rather than `LineParserTests`, for the same kind of reason and worth stating rather than leaving as an oddity. `LineParser` reports only *that* a line is malformed; it is handed one line's bytes and knows neither where that line sat in the file nor which line it was, so the diagnostic named in the contract table is assembled by whichever reader was holding the offset -- `ChunkReader` on the input, `RunCursor` and `RangePartitioner` on run files, `OutputVerifier` on the output. Each of those chooses its own exception and line-number bookkeeping, but the 128-byte truncation is owned once, by `MalformedLineException.PreviewOf`, and LP-25 asserts it through the reader that reaches it first. An untruncated preview is not a cosmetic defect under fail-fast -- one hostile line turns the error message into 64 KiB of stderr.
 
 ---
 
@@ -223,6 +223,7 @@ The three ordering-law cases, OC-09 through OC-11, are the tests most often skip
 | CM-07 | Carries the parsed number alongside the extent | Lines with numbers spanning the full signed 64-bit range, including negatives | Each descriptor's number matches the parser's result exactly |
 | CM-08 | Reconstructs the chunk in descriptor order | A sorted descriptor array written back out | The written bytes are a permutation of the input lines with no loss and no duplication |
 | CM-09 | Emits single-character terminators regardless of input convention | A chunk built from input using the two-character convention, and a mixed chunk | Every written line, including the last, is followed by exactly one single-character terminator; no carriage returns appear in the output |
+| CM-10 | Builds a descriptor through the one shared factory | `LineDescriptor.TryCreate` over a valid line at a non-zero buffer offset, and over a line with no period | The valid line yields true with the parsed number, the absolute offset and length, the string offset past the separator and space, and the prefix of the string part; the malformed line yields false and a default descriptor, leaving the caller to choose its diagnostic |
 
 ---
 
