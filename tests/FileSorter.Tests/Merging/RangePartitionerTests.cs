@@ -98,7 +98,7 @@ public sealed class RangePartitionerTests : IDisposable
     {
         // Eight workers over three lines: at most three slices can hold anything, and the
         // rest are empty. Nothing downstream treats an empty slice specially -- it simply
-        // opens no handle for it (MergeExecutor.MergeSliceAsync) -- so the only thing to
+        // opens no handle for it (PartitionedMerge.MergeSliceAsync) -- so the only thing to
         // pin here is that the partition is still complete.
         List<byte[]> runs = [Lines(["1. a"]), Lines(["2. b"]), Lines(["3. c"])];
         IReadOnlyList<string> paths = Write(runs);

@@ -36,28 +36,36 @@ internal static class ProgressReporter
     // Reports actual merge parallelism, splitter cost, slice balance, and preallocation.
     internal static void ReportMergeShape(MergeExecutor executor)
     {
-        if (executor.MergeParallelismUsed > 1)
+        if (executor.Partition is not { } stats)
+        {
+            Console.Error.WriteLine("  merge parallelism 1");
+        }
+        else if (stats.Workers > 1)
         {
             // An empty slice yields infinity, which is clearer as text than "∞x".
-            string imbalance = double.IsPositiveInfinity(executor.PartitionImbalance)
+            string imbalance = double.IsPositiveInfinity(stats.Imbalance)
                 ? "n/a (an empty slice)"
-                : string.Create(CultureInfo.InvariantCulture, $"{executor.PartitionImbalance:F2}x");
+                : string.Create(CultureInfo.InvariantCulture, $"{stats.Imbalance:F2}x");
 
-            string sparse = executor.OutputMarkedSparse ? "sparse preallocation" : "plain preallocation";
+            string sparse = stats.Sparse ? "sparse preallocation" : "plain preallocation";
             Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"  merge parallelism {executor.MergeParallelismUsed}: splitters located in " +
-                $"{executor.SplitterSeconds:F2}s, slice imbalance {imbalance}, " +
-                $"workers {executor.QuickestWorkerSeconds:F1}-{executor.SlowestWorkerSeconds:F1}s, {sparse}"));
+                $"  merge parallelism {stats.Workers}: splitters located in " +
+                $"{stats.SplitterSeconds:F2}s, slice imbalance {imbalance}, " +
+                $"workers {stats.QuickestWorkerSeconds:F1}-{stats.SlowestWorkerSeconds:F1}s, {sparse}"));
         }
-        else if (executor.SplitterSeconds > 0)
+        else if (double.IsPositiveInfinity(stats.Imbalance))
         {
-            // Sampling can run even when no partition is available; keep that cost visible.
+            // The attempt sampled a partition with an empty slice (for example all-equal
+            // keys) and merged sequentially instead.
             Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"  merge parallelism 1 (sampling cost {executor.SplitterSeconds:F2}s; no partition found)"));
+                $"  merge parallelism 1 (sampling cost {stats.SplitterSeconds:F2}s; " +
+                $"partition had an empty slice, merged sequentially)"));
         }
         else
         {
-            Console.Error.WriteLine("  merge parallelism 1");
+            // Sampling can run even when no partition is available; keep that cost visible.
+            Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"  merge parallelism 1 (sampling cost {stats.SplitterSeconds:F2}s; no partition found)"));
         }
     }
 

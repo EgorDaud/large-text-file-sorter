@@ -71,6 +71,7 @@ FileSorter/
     MergePlanner.cs               pass and group arithmetic
     MergePass.cs
     MergeExecutor.cs              drives the passes, owns intermediate runs
+    PartitionedMerge.cs           the partitioned path: workers over key ranges, PartitionStats
     MergeDriver.cs                phase two's driver: the progress line around one ExecuteAsync
     RunCursor.cs
     RunCursorBuffers.cs           the two read-ahead windows and descriptor array per cursor
@@ -510,7 +511,7 @@ Holds one head per run and never buffers a whole run. Both read-ahead buffers **
 
 **Delivery is split into a synchronous `TryMoveNext` and the async `MoveNextAsync`.** A window holds thousands of pending descriptors between fills — about 2,700 per worker at the shipped 4 GiB eight-worker plan, roughly 21,800 at one worker — so a call that only hands out the next pending descriptor need not be `async` at all. `TryMoveNext` touches nothing but the pending index and `Current`, so it can never start or observe a fill and changes nothing about the invariant. `MoveNextAsync` tries the same pending descriptor first, so `TryMoveNext() || await MoveNextAsync(ct)` is indistinguishable from a bare `await` except for the state machine it does not pay.
 
-**A malformed line carries a run index, not a path.** A cursor reports `ByteOffset` relative to whatever stream it was handed — the whole run file sequentially, only a worker's slice under a partitioned merge — because that is all it knows. `runIndex` is a label the caller can map back; `MergeExecutor.MergeSliceAsync` is what reads it and builds a corrected exception naming the run's own path and an absolute offset.
+**A malformed line carries a run index, not a path.** A cursor reports `ByteOffset` relative to whatever stream it was handed — the whole run file sequentially, only a worker's slice under a partitioned merge — because that is all it knows. `runIndex` is a label the caller can map back; `PartitionedMerge.MergeSliceAsync` is what reads it and builds a corrected exception naming the run's own path and an absolute offset.
 
 **A partitioned merge's slice bound lives outside this type, deliberately.** The bound lives in `RunSliceStream`, a read-only view that starts at `start` and reports end of stream at `end`. This cursor already carries three interacting conditions around the end of its input — a prefetch possibly in flight, a carry surviving a window that ended on descriptor capacity, and the exhausted flag deciding which the next window takes — and a bound inside it would be a fourth, the one that interacts worst, since "the stream had nothing more" and "this slice ends here" would become two reasons for one state. Expressed outside, a slice end *is* the end of stream this cursor already handles.
 
@@ -599,12 +600,14 @@ internal sealed class MergeExecutor
     public long   TotalBytesToWrite  { get; }   // exact, computed once from MergePlanner's own plan
     public double OutputWaitSeconds  { get; }   // SUMMED across workers under a partitioned merge
 
-    public int    MergeParallelismUsed  { get; }   // 1 unless the partitioned path actually ran
-    public double SplitterSeconds       { get; }   // 0 on the sequential path
-    public double PartitionImbalance    { get; }   // largest worker slice over smallest
-    public double SlowestWorkerSeconds  { get; }
-    public double QuickestWorkerSeconds { get; }
+    public PartitionStats? Partition { get; }      // null unless a partitioned attempt was made
 }
+
+// Workers is 1 when the attempt fell back to the sequential path: Imbalance is then infinity
+// for a partition with an empty slice, or 0 when no partition could be sampled.
+internal readonly record struct PartitionStats(
+    int Workers, double SplitterSeconds, double Imbalance, bool Sparse,
+    double QuickestWorkerSeconds, double SlowestWorkerSeconds);
 ```
 
 This block lists the members the notes below are about, not every member: `PlannedPasses` and `OutputOpened` (which gates deleting a partial output on failure) are omitted.
@@ -628,7 +631,7 @@ Because phase two may use the whole budget, phase one's pool has to be unreachab
 
 `PassesExecuted` exists so MP-10 can assert that the passes actually run match the planner's prediction. It is the only member here that exists for a test, and it is what makes the multi-pass claim measurable rather than asserted. MP-10 uses a real temporary directory with kilobyte-sized runs and is the one Part 2 case that touches disk; an interface introduced to avoid that would buy one test double at the cost of the exact pattern the brief punishes.
 
-**`ExecuteAsync` takes one branch before any of the above.** When `MergeParallelism` is above one *and* the planner returned one pass holding one group with nothing carried forward — which by its own construction means that group is every run there is — the call goes to the partitioned merge and returns, having executed one pass. A multi-pass merge would have to partition every group of every pass against intermediate runs that do not exist yet, for a phase whose cost at that point is dominated by the extra passes, so the planner is left untouched and the branch declines the case.
+**`ExecuteAsync` takes one branch before any of the above.** When `MergeParallelism` is above one *and* the planner returned one pass holding one group with nothing carried forward — which by its own construction means that group is every run there is — the call goes to the partitioned merge and returns, having executed one pass. A multi-pass merge would have to partition every group of every pass against intermediate runs that do not exist yet, for a phase whose cost at that point is dominated by the extra passes, so the planner is left untouched and the branch declines the case. The partitioned path declines one more case, after sampling and before it touches the output: a partition with an empty slice (all-equal keys, or fewer distinct keys than workers) would hand one worker nearly everything with a window sized for several, so `ExecuteAsync` merges sequentially instead.
 
 ```csharp
 internal sealed class MergeProgress
@@ -892,7 +895,7 @@ Cancellation in the sorter: `ConsoleRun` cancels the token on the first `Console
 | Unit 5, the in-memory chunk sorter | `RunGeneration/ChunkSorter.Sort` |
 | Unit 6, the k-way merge | `Merging/KWayMerge.MergeAsync`, `Merging/RunCursor` |
 | Unit 6, the single-run shortcut | `Merging/RunPlacement.Place`, branched in `Program` |
-| Unit 6a, the range partition and the merge slices | `Merging/RangePartitioner.Locate`, `RangePartition`, `RunSliceStream`, `OutputSliceStream`, `SparseFile` |
+| Unit 6a, the range partition and the merge slices | `Merging/RangePartitioner.Locate`, `RangePartition`, `RunSliceStream`, `OutputSliceStream`, `SparseFile`, `PartitionedMerge` |
 | Unit 7, the multi-pass merge planner | `Merging/MergePlanner.Plan` |
 | Unit 7, MP-10, predicted versus actual pass count | `Merging/MergeExecutor.ExecuteAsync`, `PassesExecuted` |
 | Unit 8, the buffer pool | `RunGeneration/BufferPool`, `PooledBuffer` |

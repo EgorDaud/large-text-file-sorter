@@ -234,8 +234,8 @@ internal static class Program
                 // Report actual workers: a multi-pass merge may use fewer than the plan allows.
                 ProgressReporter.ReportMergeShape(executor);
                 Console.Error.WriteLine(
-                    executor.MergeParallelismUsed > 1
-                        ? $"  merge waited {executor.OutputWaitSeconds:F1}s on output writes (summed across {executor.MergeParallelismUsed} workers)"
+                    executor.Partition is { Workers: > 1 } partition
+                        ? $"  merge waited {executor.OutputWaitSeconds:F1}s on output writes (summed across {partition.Workers} workers)"
                         : $"  merge waited {executor.OutputWaitSeconds:F1}s on output writes");
             }
         }

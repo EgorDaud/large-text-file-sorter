@@ -162,7 +162,7 @@ public sealed class RunSliceStreamTests : IDisposable
         long end = start + ((long)lineCountInSlice * LineWidth);
 
         // The cursor owns the slice stream and the slice stream owns the file, exactly as
-        // in MergeExecutor.MergeSliceAsync, so disposing the cursor is what closes the
+        // in PartitionedMerge.MergeSliceAsync, so disposing the cursor is what closes the
         // handle -- there is no second owner here to hide a leak behind.
         List<string> delivered = [];
         FileStream file = new(path, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1, FileOptions.Asynchronous);
