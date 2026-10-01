@@ -290,7 +290,7 @@ public sealed class MemoryBudgetTests
         // decides:
         //   floorR = 1_026; floorBytesPerRunCursor = 2*1_026 + 16*32 = 2_564.
         //
-        // The reference plan MinimumViableBudget builds (MergeFanIn = MinMergeFanIn = 2,
+        // The plan at the minimum viable budget (MergeFanIn = MinMergeFanIn = 2,
         // MergeParallelism = 1) prices its own loser tree: MergeMetadataBytes = 1*2*44 =
         // 88, with no partition-offset term at one worker, so
         // MinimumViableBudget(4, 1024, 64) = 2*2_564 + 1_048_576 + 88 = 1_053_792.
@@ -309,7 +309,7 @@ public sealed class MemoryBudgetTests
         //   floor by construction.
         //   MergeMetadataBytes = 1*2*44 = 88.
         //   WorstCasePhaseTwoBytes = 1*2*2_564 + 1*1_048_576 + 88 = 1_053_792, exactly
-        //   the minimum (this reference plan IS the minimum's own construction).
+        //   the minimum (this plan is the one at the minimum itself).
         long minimumAtP4 = MemoryBudget.MinimumViableBudget(4, 1024, 64);
         Assert.Equal(1_053_792, minimumAtP4);
         MemoryPlan atP4Minimum = MemoryBudget.Calculate(
@@ -422,12 +422,12 @@ public sealed class MemoryBudgetTests
     public void Fails_clearly_when_the_budget_is_one_byte_below_the_minimum_viable_budget()
     {
         // maxLine=1024, assumedMean=64, parallelism=1.
-        // Phase two's reference cost: floorReadAheadBufferSize = maxLineLength + 2 =
+        // Phase two's cost at the minimum: floorReadAheadBufferSize = maxLineLength + 2 =
         // 1026, floorDescriptorCapacity = floor(1026/64) = 16, bytesPerRunCursor =
-        // 2*1026 + 16*32 = 2564. The reference plan also prices its own loser tree
+        // 2*1026 + 16*32 = 2564. The plan at the minimum also prices its own loser tree
         // (1 worker * 2 (MinMergeFanIn) * LoserTreeBytesPerFanInSlot (44) = 88, no
         // partition-offset term at one worker):
-        // reference.WorstCasePhaseTwoBytes = 2*2564 + 1_048_576 + 88 = 1_053_792, of
+        // WorstCasePhaseTwoBytes at the minimum = 2*2564 + 1_048_576 + 88 = 1_053_792, of
         // which OutputBufferSize is almost all.
         //
         // Phase one's own minimum uses requiredChunkSize = maxLineLength + 3 = 1027
@@ -460,8 +460,8 @@ public sealed class MemoryBudgetTests
         // worker); cursorAndMetadataCost = 2564+44 = 2608 (the cursor plus its
         // loser-tree slot); MergeFanIn = floor(5_216/2608) = 2 exactly -- the window
         // stays at its floor, nowhere near the 2048 ceiling, so ReadAheadBufferSize and
-        // ReadAheadDescriptorCapacity match the reference plan and
-        // WorstCasePhaseTwoBytes reproduces the reference figure exactly: 1_053_792.
+        // ReadAheadDescriptorCapacity are the floor values and
+        // WorstCasePhaseTwoBytes reproduces the minimum exactly: 1_053_792.
         //
         // Phase one is comfortably inside the budget at this size:
         // spillRoom(1) = 1_053_792-65_536 = 988_256; denom(1) = 352;
@@ -815,6 +815,25 @@ public sealed class MemoryBudgetTests
         Assert.Equal(2_147_483_590, belowBoundary.ChunkSize);
         Assert.True(atBoundary.WorstCasePhaseOneBytes <= firstClampedBudget);
         Assert.True(belowBoundary.WorstCasePhaseOneBytes <= firstClampedBudget - 1);
+    }
+
+    [Theory]
+    [Trait("Case", "MB-15")]
+    [InlineData(1L << 60)]
+    [InlineData(long.MaxValue)]
+    public void Plans_a_budget_far_above_what_the_arithmetic_can_multiply_without_overflow(long budget)
+    {
+        // The command line accepts --memory up to about 8 EiB. The raw chunk solve
+        // multiplies the budget by the assumed mean line length, which wrapped negative
+        // from about 2^58 bytes and reported such a budget as too small. A budget this
+        // large must plan like any other, with the chunk and window at their ceilings.
+        MemoryPlan plan = MemoryBudget.Calculate(
+            budgetBytes: budget, parallelism: 8, maxLineLength: 65_536, assumedMeanLineLength: 32);
+
+        Assert.Equal(Array.MaxLength, plan.ChunkSize);
+        Assert.True(plan.MergeFanIn >= 2);
+        Assert.True(plan.WorstCasePhaseOneBytes <= budget);
+        Assert.True(plan.WorstCasePhaseTwoBytes <= budget);
     }
 
     [Fact]

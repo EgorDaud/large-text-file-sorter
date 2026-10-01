@@ -416,7 +416,7 @@ public sealed class SortRoundTripTests : IDisposable
         Assert.True(sequentialRunCount >= 2, "the sequential shape must produce more than one run, or it is the single-run shortcut in disguise");
         Assert.Single(MergePlanner.Plan(sequentialRunCount, sequentialPlan.MergeFanIn));
 
-        // Genuine multi-pass, N = 1: MinimumViableBudget's reference plan is built at
+        // Genuine multi-pass, N = 1: The plan at the minimum viable budget has
         // exactly MergeFanIn = 2, the bare minimum a viable budget can give, so the
         // minimum itself with no margin is the one configuration where any run count
         // above two forces several passes. At parallelism 4 that minimum's chunk
@@ -786,7 +786,7 @@ public sealed class SortRoundTripTests : IDisposable
     [Trait("Case", "ET-09")]
     public async Task Sorting_forces_a_multi_pass_merge_and_leaves_no_private_directory_behind_on_success()
     {
-        // MinimumViableBudget's own reference plan pins MergeFanIn at MinMergeFanIn (2)
+        // The plan at the minimum viable budget pins MergeFanIn at MinMergeFanIn (2)
         // -- the bare minimum a viable budget can give -- so any run count above two
         // forces several merge passes rather than one, the same technique ET-04's own
         // multi-pass shape uses. The input needs to be large enough, at this budget's

@@ -16,6 +16,11 @@ internal static class MemoryBudget
     // Cap concurrency before window pressure outweighs partitioning throughput.
     private const int MaxMergeParallelism = 8;
 
+    // The largest budget the arithmetic plans against. Chunk and window sizes saturate far
+    // below it, and it keeps budget * assumedMeanLineLength within a long for any mean
+    // line length up to 4 KiB (the CLI assumes 32), so a larger --memory cannot wrap.
+    private const long MaxPlannedBudgetBytes = 1L << 50;
+
     // KWayMerge uses this as its only output buffer. It keeps concurrent partition
     // writers from spending disproportionate time waiting for output.
     private const int OutputBufferSize = 1024 * 1024;
@@ -63,6 +68,8 @@ internal static class MemoryBudget
             throw new ArgumentOutOfRangeException(nameof(assumedMeanLineLength), assumedMeanLineLength,
                 $"The assumed mean line length must be positive and no greater than the maximum line length ({maxLineLength}).");
         }
+
+        budgetBytes = Math.Min(budgetBytes, MaxPlannedBudgetBytes);
 
         int descriptorSize = MemoryPlan.DescriptorSize;
 
@@ -192,14 +199,16 @@ internal static class MemoryBudget
     // The smallest budget for which TryCalculate succeeds, found by bisection. Viability
     // is monotone in the budget (property tests PB-21 and PB-23), which is what makes
     // bisection valid. The low bound is the output buffer: any budget up to it leaves no
-    // room for a merge cursor, so it is surely unviable. The high bound, 2^50 bytes,
-    // exceeds the budget needed at the CLI's --max-line ceiling (Array.MaxLength - 3) up
-    // to a parallelism of about 250,000. Where nothing is viable (a line limit above that
-    // ceiling), the search ends at the high bound, so the result is always positive.
+    // room for a merge cursor, so it is surely unviable. The high bound is the largest
+    // budget TryCalculate plans against (2^50 bytes), so a larger one cannot be viable
+    // where this is not. It exceeds the budget needed at the CLI's --max-line ceiling
+    // (Array.MaxLength - 3) up to a parallelism of about 250,000. Where nothing is viable
+    // (a line limit above that ceiling), the search ends at the high bound, so the result
+    // is always positive.
     internal static long MinimumViableBudget(int parallelism, int maxLineLength, int assumedMeanLineLength)
     {
         long unviable = OutputBufferSize;
-        long viable = 1L << 50;
+        long viable = MaxPlannedBudgetBytes;
 
         while (viable - unviable > 1)
         {

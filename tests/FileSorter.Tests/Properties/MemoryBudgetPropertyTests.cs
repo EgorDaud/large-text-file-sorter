@@ -101,8 +101,11 @@ public sealed class MemoryBudgetPropertyTests
                 long minimum = MemoryBudget.MinimumViableBudget(parallelism, maxLineLength, ShippedAssumedMeanLineLength);
 
                 Assert.True(
-                    TryCalculate(minimum, parallelism, maxLineLength, out _),
+                    TryCalculate(minimum, parallelism, maxLineLength, out MemoryPlan plan),
                     $"the minimum viable budget is not viable: {Describe(minimum, parallelism, maxLineLength)}");
+                Assert.True(
+                    plan.WorstCasePhaseOneBytes <= minimum && plan.WorstCasePhaseTwoBytes <= minimum,
+                    $"the plan at the minimum exceeds it: {Describe(minimum, parallelism, maxLineLength)}");
                 Assert.False(
                     TryCalculate(minimum - 1, parallelism, maxLineLength, out _),
                     $"one byte under the minimum is viable: {Describe(minimum - 1, parallelism, maxLineLength)}");
