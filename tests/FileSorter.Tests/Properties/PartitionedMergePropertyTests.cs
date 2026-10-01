@@ -12,7 +12,7 @@ namespace FileSorter.Tests.Properties;
 ///
 /// Every part of the partition is a place a line can be lost or emitted twice -- a
 /// splitter located one line late in one run and on time in another, a slice boundary
-/// landing exactly on a line start, an empty slice, a worker whose predicted output
+/// landing exactly on a line start, an empty slice of one run, a worker whose predicted output
 /// length disagrees with what it wrote -- and all of those still produce an output that
 /// is sorted and of plausible length. Only byte-identity against a merge that does none
 /// of it rejects them.
@@ -27,7 +27,10 @@ namespace FileSorter.Tests.Properties;
 /// parts, so byte-identical lines land in different runs and a splitter is routinely a
 /// line that also appears many times over; run and entry counts low enough that a worker
 /// count of 8 regularly exceeds the line count outright; and empty runs, whenever the
-/// bucket draw gives a run nothing.
+/// bucket draw gives a run nothing. A partition with an empty slice overall is not merged
+/// in parallel at all (COR-8); the executor falls back to the sequential merge, so those
+/// draws still must agree byte for byte, and the property counts how many draws really ran
+/// the partitioned path so it cannot pass with every draw degenerate.
 /// </summary>
 public sealed class PartitionedMergePropertyTests : IDisposable
 {
@@ -73,6 +76,7 @@ public sealed class PartitionedMergePropertyTests : IDisposable
     public async Task The_partitioned_merge_produces_the_same_bytes_as_the_sequential_one()
     {
         int iteration = 0;
+        int partitionedDraws = 0;
         await Scenario.SampleAsync(async scenario =>
         {
             (List<(long Number, string StringPart)> entries, int runCount, int workerCount, int[] bucket) = scenario;
@@ -93,18 +97,24 @@ public sealed class PartitionedMergePropertyTests : IDisposable
             byte[][] sortedRunBytes = [.. rawRunBytes.Select(NaiveReferenceSort.Sort)];
             byte[] expected = NaiveReferenceSort.Sort([.. rawRunBytes.SelectMany(b => b)]);
 
-            byte[] sequential = await MergeAsync(
+            (byte[] sequential, _) = await MergeAsync(
                 Path.Combine(caseDirectory, "sequential"), sortedRunBytes, mergeParallelism: 1, ct);
-            byte[] partitioned = await MergeAsync(
+            (byte[] partitioned, int workersUsed) = await MergeAsync(
                 Path.Combine(caseDirectory, "partitioned"), sortedRunBytes, workerCount, ct);
+            if (workersUsed > 1)
+            {
+                Interlocked.Increment(ref partitionedDraws);
+            }
 
             Assert.Equal(expected, sequential);
             Assert.Equal(expected, partitioned);
             Assert.Equal(sequential, partitioned);
         }, iter: 300);
+
+        Assert.True(partitionedDraws > 0, "No draw reached the partitioned path.");
     }
 
-    private static async Task<byte[]> MergeAsync(
+    private static async Task<(byte[] Output, int Workers)> MergeAsync(
         string directory, byte[][] runBytes, int mergeParallelism, CancellationToken ct)
     {
         using TemporaryRunSet runs = new(directory);
@@ -133,13 +143,20 @@ public sealed class PartitionedMergePropertyTests : IDisposable
 
         Assert.Equal(1, executor.PassesExecuted);
 
-        // The partitioned path is only claimed when it was actually taken: a run set
-        // holding no bytes at all has no partition to locate, and the executor falls back
-        // to the sequential merge, which is correct and merely slower.
-        long totalBytes = runBytes.Sum(b => (long)b.Length);
-        int expectedWorkers = mergeParallelism > 1 && totalBytes > 0 ? mergeParallelism : 1;
-        Assert.Equal(expectedWorkers, executor.MergeParallelismUsed);
+        // The executor either partitions across the full worker count or falls back to the
+        // sequential merge, which is correct and merely slower: an empty run set has no
+        // partition to locate, and a partition with an empty slice is degenerate (COR-8).
+        // Never in between, and never partitioned when a single worker was asked for.
+        int workers = executor.Partition?.Workers ?? 1;
+        Assert.True(workers == 1 || workers == mergeParallelism, $"Unexpected worker count {workers}.");
 
-        return await File.ReadAllBytesAsync(outputPath, ct);
+        // A fallback must be justified by an empty slice, never happen silently.
+        if (workers == 1 && mergeParallelism > 1 && runBytes.Sum(b => (long)b.Length) > 0)
+        {
+            Assert.NotNull(executor.Partition);
+            Assert.True(double.IsPositiveInfinity(executor.Partition.Value.Imbalance));
+        }
+
+        return (await File.ReadAllBytesAsync(outputPath, ct), workers);
     }
 }

@@ -40,12 +40,13 @@ FileSorter/
   Program.cs                      dispatch (--help, --verify, sort mode), the budgetBytes
                                   catch, phase-two branch, ActorSystem lifetime
   Startup/
-    CommandLine.cs                argument parsing for both modes, and the size-suffix parser
+    CommandLine.cs                sort-mode argument parsing, and the size-suffix parser verify mode reuses
     ConsoleRun.cs                 Ctrl+C and SIGTERM wiring, and the exception-to-exit-code ladder
                                   shared by sort and verify
     ExitCodes.cs                  the process exit code constants
     CapacityProbe.cs              output-directory and --temp validation, the free-space probe
-    ProgressReporter.cs           the periodic stderr lines and the merge-shape summary
+    ProgressReporter.cs           the byte-count formatter, the reporting interval, and RunWithProgressAsync,
+                                  which runs a phase beside its periodic reporter
     SorterOptions.cs
     MemoryBudget.cs               MemoryPlan Calculate(...)
     MemoryPlan.cs
@@ -56,6 +57,7 @@ FileSorter/
     LineCursor.cs                 line boundaries, terminators, carry-over, length limit
     LineParser.cs                 the line grammar
     LineOrder.cs                  the three-level comparator
+    LineStager.cs                 batches LF-terminated lines into one caller-supplied write buffer
     MalformedLineException.cs
   RunGeneration/
     BufferPool.cs                 BufferPool, PooledBuffer
@@ -64,18 +66,21 @@ FileSorter/
     ChunkSorter.cs                descriptor sort
     ChunkSpiller.cs               sort, write run, release the pool slot
     RunGenerationStrategy.cs      the delegate, and ChunkSpill
-    RunGenerationDriver.cs        phase one's driver: builds the stream, pool, reader and spiller
+    RunGenerationDriver.cs        phase one's driver: builds the stream, pool, reader and spiller, and
+                                  owns the read-progress line
     AkkaRunGeneration.cs          implementation A
     ChannelRunGeneration.cs       implementation B
   Merging/
     MergePlanner.cs               pass and group arithmetic
     MergePass.cs
     MergeExecutor.cs              drives the passes, owns intermediate runs
-    MergeDriver.cs                phase two's driver: the progress line around one ExecuteAsync
+    PartitionedMerge.cs           the partitioned path: workers over key ranges, PartitionStats
+    MergeReporter.cs              phase two's stderr lines: the progress line and the merge-shape summary
     RunCursor.cs
     RunCursorBuffers.cs           the two read-ahead windows and descriptor array per cursor
     KWayMerge.cs                  one group of runs into one output
     RunPlacement.cs
+    StagingFile.cs                unique staging path beside a destination, and its best-effort delete
     MergeProgress.cs              bytes written and output-wait time, shared across one merge call
     RangePartitioner.cs           sample, then locate one partition of every run by key range
     RangePartition.cs             the located offsets, slice lengths and output offsets
@@ -83,7 +88,7 @@ FileSorter/
     OutputSliceStream.cs          one worker's write view of [start, end) of the output, guarded
     SparseFile.cs                 FSCTL_SET_SPARSE on the partitioned output, Windows only
   Verification/
-    VerifyOptions.cs
+    VerifyOptions.cs              the options record and --verify's own argument parsing and --max-line ceiling
     VerificationResult.cs         FileScanReport, VerificationOutcome
     OutputVerifier.cs             --verify: adjacent-order check plus count/hash agreement
     VerifyCommand.cs              --verify's driver
@@ -124,6 +129,7 @@ internal readonly struct LineDescriptor
     public int Length => (int)_offsetAndLength;           // raw line length, terminators excluded
     public int StringLength => StringLengthOf(Offset, Length, StringOffset);
 
+    public static bool TryCreate(byte[] buffer, int offset, int length, out LineDescriptor descriptor);
     public static int StringLengthOf(int offset, int length, int stringOffset);
     public static ulong BuildPrefix(ReadOnlySpan<byte> stringPart);
 }
@@ -131,7 +137,7 @@ internal readonly struct LineDescriptor
 
 Thirty-two bytes, no reference field, so an array of descriptors is one contiguous block and sorting reorders only descriptors — the buffer is never rearranged and no line is copied or decoded on the hot path. `Offset` and `Length` share one packed field to buy *field count*, not bytes: a five-field version measured out to the same thirty-two bytes but ran 40% slower on the in-memory merge, because RyuJIT's struct promotion stops at four fields. `MemoryPlan` reads the size via `Unsafe.SizeOf` rather than a constant, so the budget stays correct if a field is added.
 
-`StringOffset` is stored rather than recomputed; the alternative is a sixteen-byte descriptor that rescans for the separator on every comparison. `Prefix` caches the first eight bytes of the string part so most comparisons never touch the buffer, and `BuildPrefix` is the one place that layout is produced, called by `ChunkReader.Describe`, `RunCursor.Describe` and the test fixtures alike, so a descriptor's prefix cannot disagree with its bytes. A packed twenty-four-byte layout is not possible: leading zeros are accepted in the number, so the distance from line start to string start is unbounded and does not fit a byte.
+`StringOffset` is stored rather than recomputed; the alternative is a sixteen-byte descriptor that rescans for the separator on every comparison. `Prefix` caches the first eight bytes of the string part so most comparisons never touch the buffer, and `BuildPrefix` is the one place that layout is produced and `LineDescriptor.TryCreate` is the one place a descriptor is built from a line (parse, string extent, prefix). `ChunkReader`, `RunCursor`, `RangePartitioner`, `OutputVerifier` and the test fixtures all go through it, each keeping only its own choice of exception, so a descriptor's prefix cannot disagree with its bytes. A packed twenty-four-byte layout is not possible: leading zeros are accepted in the number, so the distance from line start to string start is unbounded and does not fit a byte.
 
 `Offset` and `StringOffset` are absolute into the chunk buffer, assigned after the carry-over copy, so a carried fragment's descriptor is written once against its final position.
 
@@ -384,7 +390,7 @@ internal sealed class ChunkSpiller
 
 Every slot handed to the spiller is released by the spiller, on both paths; together with `ChunkReader`'s `catch`, that is the whole release discipline.
 
-The run file is opened with `bufferSize: 1` like every read stream (D12): the `FileStream` buffers nothing, and a staging array sized at `SpillBufferSize` takes its place, each line and its terminator copied in and one `WriteAsync` issued per full buffer. Nothing else buffers a *write* the way a read-ahead buffer already buffers a read, which is why the staging array gets a budgeted allocation.
+The run file is opened with `MemoryBudget.UnbufferedStream` (`bufferSize: 1`) like every read stream (D12): the `FileStream` buffers nothing, and a staging array sized at `SpillBufferSize` takes its place, each line and its terminator copied in and one `WriteAsync` issued per full buffer. Nothing else buffers a *write* the way a read-ahead buffer already buffers a read, which is why the staging array gets a budgeted allocation.
 
 The run's final size is known before the first byte is written — the sum of each sorted line's length plus its terminator — so `SetLength` is called immediately after opening, turning a file grown 64 KiB at a time into one allocation. That is safe only because the total is exact by construction and checked: `SpillAsync` compares the stream's `Position` against it once every line is staged and throws on a mismatch, because a wrong-length run reads as a truncated last line rather than failing loudly.
 
@@ -510,7 +516,7 @@ Holds one head per run and never buffers a whole run. Both read-ahead buffers **
 
 **Delivery is split into a synchronous `TryMoveNext` and the async `MoveNextAsync`.** A window holds thousands of pending descriptors between fills — about 2,700 per worker at the shipped 4 GiB eight-worker plan, roughly 21,800 at one worker — so a call that only hands out the next pending descriptor need not be `async` at all. `TryMoveNext` touches nothing but the pending index and `Current`, so it can never start or observe a fill and changes nothing about the invariant. `MoveNextAsync` tries the same pending descriptor first, so `TryMoveNext() || await MoveNextAsync(ct)` is indistinguishable from a bare `await` except for the state machine it does not pay.
 
-**A malformed line carries a run index, not a path.** A cursor reports `ByteOffset` relative to whatever stream it was handed — the whole run file sequentially, only a worker's slice under a partitioned merge — because that is all it knows. `runIndex` is a label the caller can map back; `MergeExecutor.MergeSliceAsync` is what reads it and builds a corrected exception naming the run's own path and an absolute offset.
+**A malformed line carries a run index, not a path.** A cursor reports `ByteOffset` relative to whatever stream it was handed — the whole run file sequentially, only a worker's slice under a partitioned merge — because that is all it knows. `runIndex` is a label the caller can map back; `PartitionedMerge.MergeSliceAsync` is what reads it and builds a corrected exception naming the run's own path and an absolute offset.
 
 **A partitioned merge's slice bound lives outside this type, deliberately.** The bound lives in `RunSliceStream`, a read-only view that starts at `start` and reports end of stream at `end`. This cursor already carries three interacting conditions around the end of its input — a prefetch possibly in flight, a carry surviving a window that ended on descriptor capacity, and the exhausted flag deciding which the next window takes — and a bound inside it would be a fourth, the one that interacts worst, since "the stream had nothing more" and "this slice ends here" would become two reasons for one state. Expressed outside, a slice end *is* the end of stream this cursor already handles.
 
@@ -570,16 +576,24 @@ One `MergeAsync` call is single-threaded by design; the only asynchrony inside i
 ```csharp
 internal static class RunPlacement
 {
-    /// tryMove returns false when the move cannot be performed, for example across volumes.
-    public static void Place(string runPath, string outputPath, Func<string, string, bool> tryMove);
+    /// tryMove defaults to File.Move and returns false when the move cannot be performed, for example across volumes.
+    public static void Place(string runPath, string outputPath, TemporaryRunSet runs, Func<string, string, bool>? tryMove = null);
+
+    /// Creates an empty output file the same atomic way.
+    public static void PlaceEmpty(string outputPath);
 }
 ```
 
 The single-run shortcut: when phase one produced one run, phase two moves it to the output path rather than reading and rewriting it, removing a full read and a full write at a hundred gigabytes. The `tryMove` delegate is the named-delegate seam of section 1 — the cross-volume fallback is forced by a two-line lambda in the tests rather than by a second volume. The copy fallback does not write onto the output path directly: it stages beside it and moves into place once the copy has finished without error. `Program` owns the branch (D14):
 
 ```csharp
-if (runPaths.Count == 1)
-    RunPlacement.Place(runPaths[0], options.OutputPath, TryMove);
+if (runPaths.Count <= 1)
+{
+    if (runPaths.Count == 0)
+        RunPlacement.PlaceEmpty(options.OutputPath);
+    else
+        RunPlacement.Place(runPaths[0], options.OutputPath, runs);
+}
 else
     await executor.ExecuteAsync(runPaths, options.OutputPath, ct);
 ```
@@ -599,12 +613,14 @@ internal sealed class MergeExecutor
     public long   TotalBytesToWrite  { get; }   // exact, computed once from MergePlanner's own plan
     public double OutputWaitSeconds  { get; }   // SUMMED across workers under a partitioned merge
 
-    public int    MergeParallelismUsed  { get; }   // 1 unless the partitioned path actually ran
-    public double SplitterSeconds       { get; }   // 0 on the sequential path
-    public double PartitionImbalance    { get; }   // largest worker slice over smallest
-    public double SlowestWorkerSeconds  { get; }
-    public double QuickestWorkerSeconds { get; }
+    public PartitionStats? Partition { get; }      // null unless a partitioned attempt was made
 }
+
+// Workers is 1 when the attempt fell back to the sequential path: Imbalance is then infinity
+// for a partition with an empty slice, or 0 when no partition could be sampled.
+internal readonly record struct PartitionStats(
+    int Workers, double SplitterSeconds, double Imbalance, bool Sparse,
+    double QuickestWorkerSeconds, double SlowestWorkerSeconds);
 ```
 
 This block lists the members the notes below are about, not every member: `PlannedPasses` and `OutputOpened` (which gates deleting a partial output on failure) are omitted.
@@ -628,7 +644,7 @@ Because phase two may use the whole budget, phase one's pool has to be unreachab
 
 `PassesExecuted` exists so MP-10 can assert that the passes actually run match the planner's prediction. It is the only member here that exists for a test, and it is what makes the multi-pass claim measurable rather than asserted. MP-10 uses a real temporary directory with kilobyte-sized runs and is the one Part 2 case that touches disk; an interface introduced to avoid that would buy one test double at the cost of the exact pattern the brief punishes.
 
-**`ExecuteAsync` takes one branch before any of the above.** When `MergeParallelism` is above one *and* the planner returned one pass holding one group with nothing carried forward — which by its own construction means that group is every run there is — the call goes to the partitioned merge and returns, having executed one pass. A multi-pass merge would have to partition every group of every pass against intermediate runs that do not exist yet, for a phase whose cost at that point is dominated by the extra passes, so the planner is left untouched and the branch declines the case.
+**`ExecuteAsync` takes one branch before any of the above.** When `MergeParallelism` is above one *and* the planner returned one pass holding one group with nothing carried forward — which by its own construction means that group is every run there is — the call goes to the partitioned merge and returns, having executed one pass. A multi-pass merge would have to partition every group of every pass against intermediate runs that do not exist yet, for a phase whose cost at that point is dominated by the extra passes, so the planner is left untouched and the branch declines the case. The partitioned path declines one more case, after sampling and before it touches the output: a partition with an empty slice (all-equal keys, or fewer distinct keys than workers) would hand one worker nearly everything with a window sized for several, so `ExecuteAsync` merges sequentially instead.
 
 ```csharp
 internal sealed class MergeProgress
@@ -649,7 +665,10 @@ internal static class OutputVerifier
     public static Task<VerificationResult> RunAsync(VerifyOptions options, CancellationToken ct);
 }
 
-internal sealed record VerifyOptions(string InputPath, string OutputPath, int MaxLineLength);
+internal sealed record VerifyOptions(string InputPath, string OutputPath, int MaxLineLength)
+{
+    internal static bool TryParse(string[] args, out VerifyOptions? options, out string? error);
+}
 
 internal readonly record struct FileScanReport(long LineCount, long ByteCount, ulong Hash);
 
@@ -662,7 +681,7 @@ internal sealed record VerificationResult(
 
 Exists so a result too large for a second full sort to compare against can be checked from the shipped binary, with the same comparator the sort uses rather than a second reading of the format that could drift.
 
-Two fixed buffers of `4 MiB + maxLineLength`, stated directly rather than derived from a `MemoryBudget`-style plan, since verification has nothing to sort and needs only head room to carry one partial line across a fill. Both files are read once, forward, as two tasks awaited together. The output scan requires every adjacent pair non-decreasing: each line is parsed into a `LineDescriptor` exactly as `ChunkReader.Describe` does and compared against the previous line's descriptor, which is kept in **a small array of its own** — that copy is what lets the comparison survive the previous line's window being overwritten by the next fill, the same reason `KWayMerge`'s invariant never lets a comparison read a window mid-refill.
+Two fixed buffers of `4 MiB + maxLineLength`, stated directly rather than derived from a `MemoryBudget`-style plan, since verification has nothing to sort and needs only head room to carry one partial line across a fill. Both files are read once, forward, as two tasks awaited together. The output scan requires every adjacent pair non-decreasing: each line is parsed into a `LineDescriptor` exactly as `LineDescriptor.TryCreate` does and compared against the previous line's descriptor, which is kept in **a small array of its own** — that copy is what lets the comparison survive the previous line's window being overwritten by the next fill, the same reason `KWayMerge`'s invariant never lets a comparison read a window mid-refill.
 
 Both scans compute the wrapping sum of FNV-1a 64 over every line's content bytes. The input scan strips a `\r\n` line's `\r` exactly as `LineCursor` strips it for the sort; the output scan does not, because this sorter's output is `\n`-terminated throughout and a `\r` before one there is always content. The two hashes are comparable *because* of that asymmetry rather than in spite of it: a byte the input scan struck as a terminator's own half is exactly the byte the sort carried into the output as content.
 
@@ -890,9 +909,9 @@ Cancellation in the sorter: `ConsoleRun` cancels the token on the first `Console
 | Unit 3, the line descriptor and chunk model | `LineFormat/LineDescriptor`, `RunGeneration/Chunk` |
 | Unit 4, the chunk boundary splitter, including CB-12 and CB-16 | `LineFormat/LineCursor` |
 | Unit 5, the in-memory chunk sorter | `RunGeneration/ChunkSorter.Sort` |
-| Unit 6, the k-way merge | `Merging/KWayMerge.MergeAsync`, `Merging/RunCursor` |
-| Unit 6, the single-run shortcut | `Merging/RunPlacement.Place`, branched in `Program` |
-| Unit 6a, the range partition and the merge slices | `Merging/RangePartitioner.Locate`, `RangePartition`, `RunSliceStream`, `OutputSliceStream`, `SparseFile` |
+| Unit 6, the k-way merge | `Merging/KWayMerge.MergeAsync`, `Merging/RunCursor`, `LineFormat/LineStager` |
+| Unit 6, the single-run shortcut | `Merging/RunPlacement.Place`, `Merging/StagingFile`, branched in `Program` |
+| Unit 6a, the range partition and the merge slices | `Merging/RangePartitioner.Locate`, `RangePartition`, `RunSliceStream`, `OutputSliceStream`, `SparseFile`, `PartitionedMerge` |
 | Unit 7, the multi-pass merge planner | `Merging/MergePlanner.Plan` |
 | Unit 7, MP-10, predicted versus actual pass count | `Merging/MergeExecutor.ExecuteAsync`, `PassesExecuted` |
 | Unit 8, the buffer pool | `RunGeneration/BufferPool`, `PooledBuffer` |
@@ -923,7 +942,7 @@ Cancellation in the sorter: `ConsoleRun` cancels the token on the first `Console
 | D9 | A pool slot owns both the byte buffer and the descriptor array; a chunk ends when either fills | Otherwise the descriptor array is a per-chunk LOH allocation and peak working set is a function of GC behaviour rather than configuration. Turns `assumedMeanLineLength` from a correctness assumption into a tuning parameter — one whose value decides, per chunk, which of `ChunkReader`'s two carry paths runs |
 | D10 | `MergeExecutor` drives the passes and owns intermediate runs; `TemporaryRunSet` lives in `Startup/` and is shared by both phases | Something has to execute a multi-pass plan, and temporary files belong to both phases rather than to phase one alone |
 | D11 | The holder releases: `ChunkReader` disposes a slot it never hands on, `ChunkSpiller` disposes every slot it receives | Any other rule leaks a slot when the reader throws on a malformed line, which is a guaranteed path on bad input rather than an edge case |
-| D12 | Every READ stream is opened `bufferSize: 1`; WRITE streams too, with a budgeted staging array (`SpillBufferSize`, `OutputBufferSize`) coalescing each line and its terminator instead. Phase two's buffers are allocated once in `MergeExecutor` and passed in | A `FileStream` buffer under an existing read-ahead buffer is unbudgeted work done twice. That argument is read-only: nothing buffers a write the way a read-ahead buffer buffers a read, so an unbuffered write stream alone would cost two syscalls per line. The staging buffer does that coalescing instead, which is what lets both sides stay unbuffered |
+| D12 | Every READ stream is opened with `MemoryBudget.UnbufferedStream` (`bufferSize: 1`); WRITE streams too, with a budgeted staging array (`SpillBufferSize`, `OutputBufferSize`) coalescing each line and its terminator instead. Phase two's buffers are allocated once in `MergeExecutor` and passed in | A `FileStream` buffer under an existing read-ahead buffer is unbudgeted work done twice. That argument is read-only: nothing buffers a write the way a read-ahead buffer buffers a read, so an unbuffered write stream alone would cost two syscalls per line. The staging buffer does that coalescing instead, which is what lets both sides stay unbuffered |
 | D13 | A strategy surfaces the first branch failure as the original exception, unwrapped; the streaming tier asserts exception-type identity across both | Otherwise `Parallel.ForEachAsync`'s `AggregateException` and Akka's fault route give the same corrupt file different exit codes. `await` unwraps the Channels path for free; it is Akka's materialized task that needs the explicit peel |
 | D14 | `Program` owns the single-run branch; `MergeExecutor` takes no `tryMove` | A parameter threaded two levels for one branch's benefit, and MP-05 already describes the single run as bypassing the merge entirely |
 | D15 | `FileWriter.Write` takes an optional `Action<long>? onProgress` | Progress on stderr is required for both programs; it is the seam the write loop reports through. A hundred gigabytes is several silent minutes otherwise. Amended: `Write` also takes a `CancellationToken`, polled with the progress report, so the generator can return 130 (see the exit-code prose) |

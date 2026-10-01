@@ -1,13 +1,9 @@
-using System.Text;
-
 namespace FileSorter.LineFormat;
 
 internal ref struct LineCursor
 {
     private const byte LineFeed = (byte)'\n';
     private const byte CarriageReturn = (byte)'\r';
-
-    private const int PreviewMaxBytes = 128;
 
     private static ReadOnlySpan<byte> ByteOrderMark => [0xEF, 0xBB, 0xBF];
 
@@ -89,9 +85,7 @@ internal ref struct LineCursor
 
     private readonly MalformedLineException BuildException(ReadOnlySpan<byte> offending)
     {
-        ReadOnlySpan<byte> preview = offending.Length > PreviewMaxBytes ? offending[..PreviewMaxBytes] : offending;
-
         return new MalformedLineException(
-            _blockBaseOffset + _position, _firstLineNumber + _linesRead, Encoding.UTF8.GetString(preview));
+            _blockBaseOffset + _position, _firstLineNumber + _linesRead, MalformedLineException.PreviewOf(offending));
     }
 }

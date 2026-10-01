@@ -1,4 +1,3 @@
-using System.Text;
 using FileSorter.LineFormat;
 
 namespace FileSorter.Merging;
@@ -8,9 +7,6 @@ namespace FileSorter.Merging;
 // and disposes its stream.
 internal sealed class RunCursor : IAsyncDisposable
 {
-    // Long enough to identify a bad line without flooding the console.
-    private const int PreviewMaxBytes = 128;
-
     private const byte CarriageReturn = (byte)'\r';
 
     private readonly Stream _run;
@@ -223,7 +219,8 @@ internal sealed class RunCursor : IAsyncDisposable
 
         int fillAmount = other.Length - carryLength;
         _prefetchCarryLength = carryLength;
-        _prefetchReadTask = FillAsync(other.AsMemory(carryLength, fillAmount), ct).AsTask();
+        _prefetchReadTask = _run.ReadAtLeastAsync(
+            other.AsMemory(carryLength, fillAmount), fillAmount, throwOnEndOfStream: false, ct).AsTask();
     }
 
     // Shifts carry and fills synchronously for the first window or buffered carry after EOF.
@@ -235,7 +232,10 @@ internal sealed class RunCursor : IAsyncDisposable
         }
 
         int fillAmount = buffer.Length - carryLength;
-        int read = _streamExhausted ? 0 : await FillAsync(buffer.AsMemory(carryLength, fillAmount), ct);
+        int read = _streamExhausted
+            ? 0
+            : await _run.ReadAtLeastAsync(
+                buffer.AsMemory(carryLength, fillAmount), fillAmount, throwOnEndOfStream: false, ct);
         if (read < fillAmount)
         {
             _streamExhausted = true;
@@ -247,11 +247,9 @@ internal sealed class RunCursor : IAsyncDisposable
 
     private LineDescriptor Describe(byte[] buffer, int offset, int length, long bufferBaseOffset)
     {
-        ReadOnlySpan<byte> line = buffer.AsSpan(offset, length);
-        if (!LineParser.TryParse(line, out long number, out int stringStart))
+        if (!LineDescriptor.TryCreate(buffer, offset, length, out LineDescriptor descriptor))
         {
-            ReadOnlySpan<byte> preview = line.Length > PreviewMaxBytes ? line[..PreviewMaxBytes] : line;
-            string previewText = Encoding.UTF8.GetString(preview);
+            string previewText = MalformedLineException.PreviewOf(buffer.AsSpan(offset, length));
             long byteOffset = bufferBaseOffset + offset;
 
             // The caller uses RunIndex to translate a slice-relative offset to its run path.
@@ -261,26 +259,6 @@ internal sealed class RunCursor : IAsyncDisposable
         }
 
         _linesRead++;
-        int stringOffset = offset + stringStart;
-        int stringLength = LineDescriptor.StringLengthOf(offset, length, stringOffset);
-        ulong prefix = LineDescriptor.BuildPrefix(buffer.AsSpan(stringOffset, stringLength));
-        return new LineDescriptor(prefix, number, offset, length, stringOffset);
-    }
-
-    private async ValueTask<int> FillAsync(Memory<byte> destination, CancellationToken ct)
-    {
-        int totalRead = 0;
-        while (totalRead < destination.Length)
-        {
-            int read = await _run.ReadAsync(destination[totalRead..], ct);
-            if (read == 0)
-            {
-                break;
-            }
-
-            totalRead += read;
-        }
-
-        return totalRead;
+        return descriptor;
     }
 }

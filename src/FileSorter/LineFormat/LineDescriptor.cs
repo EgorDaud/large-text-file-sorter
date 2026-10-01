@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 
 namespace FileSorter.LineFormat;
 
@@ -26,6 +27,27 @@ internal readonly struct LineDescriptor
     public int Length => (int)_offsetAndLength;           // raw line length, terminators excluded
 
     public int StringLength => StringLengthOf(Offset, Length, StringOffset);
+
+    /// <summary>
+    /// Parses one line (terminators already stripped) and builds its descriptor. Offsets are
+    /// absolute into <paramref name="buffer"/>. Returns false for a malformed line, leaving the
+    /// caller to choose the diagnostic.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryCreate(byte[] buffer, int offset, int length, out LineDescriptor descriptor)
+    {
+        if (!LineParser.TryParse(buffer.AsSpan(offset, length), out long number, out int stringStart))
+        {
+            descriptor = default;
+            return false;
+        }
+
+        int stringOffset = offset + stringStart;
+        int stringLength = StringLengthOf(offset, length, stringOffset);
+        ulong prefix = BuildPrefix(buffer.AsSpan(stringOffset, stringLength));
+        descriptor = new LineDescriptor(prefix, number, offset, length, stringOffset);
+        return true;
+    }
 
     public static int StringLengthOf(int offset, int length, int stringOffset) => offset + length - stringOffset;
 

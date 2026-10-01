@@ -1,21 +1,17 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
-using FileSorter.Verification;
 
 namespace FileSorter.Startup;
 
-// Parses sort and --verify options. Program prints usage when parsing fails.
+// Parses sort-mode options and the size, path and --max-line syntax VerifyOptions shares. Program prints usage
+// when parsing fails.
 internal static class CommandLine
 {
     private const long DefaultMemoryBudgetBytes = 1L << 30;   // 1 GiB
-    private const int  DefaultMaxLineLength     = 64 * 1024;  // 64 KiB
+    internal const int DefaultMaxLineLength      = 64 * 1024;  // 64 KiB
 
     // A chunk must exceed maxLine + 2 bytes yet fit one array, so no budget can satisfy a larger value.
     internal static readonly long MaxLineLengthCeiling = Array.MaxLength - 3;
-
-    // Verify allocates BaseBufferSize + maxLineLength per file, so its ceiling must
-    // remain below Array.MaxLength. Derive it from OutputVerifier's buffer size.
-    internal static readonly long VerifyMaxLineLengthCeiling = Array.MaxLength - OutputVerifier.BaseBufferSize;
 
     internal static readonly string Usage = $"""
         Usage:
@@ -110,13 +106,11 @@ internal static class CommandLine
                         return false;
                     }
 
-                    if (!TryParseSize(maxLine, out long parsedMaxLine) || parsedMaxLine <= 0 || parsedMaxLine > MaxLineLengthCeiling)
+                    if (!TryParseMaxLine(maxLine, MaxLineLengthCeiling, out maxLineLength, out error))
                     {
-                        error = $"--max-line expects a byte count between 1 and {MaxLineLengthCeiling}, optionally suffixed B, KiB, MiB or GiB, but got '{maxLine}'.";
                         return false;
                     }
 
-                    maxLineLength = (int)parsedMaxLine;
                     break;
 
                 case "--parallelism":
@@ -157,23 +151,8 @@ internal static class CommandLine
                     break;
 
                 default:
-                    if (argument.StartsWith("--", StringComparison.Ordinal))
+                    if (!TryTakePath(argument, ref inputPath, ref outputPath, out error))
                     {
-                        error = $"Unknown option '{argument}'.";
-                        return false;
-                    }
-
-                    if (inputPath is null)
-                    {
-                        inputPath = argument;
-                    }
-                    else if (outputPath is null)
-                    {
-                        outputPath = argument;
-                    }
-                    else
-                    {
-                        error = $"Unexpected argument '{argument}'; input and output are already '{inputPath}' and '{outputPath}'.";
                         return false;
                     }
 
@@ -209,81 +188,6 @@ internal static class CommandLine
         return true;
     }
 
-    // Verify mode shares only --max-line with sorting, so it has a separate parser.
-    internal static bool TryParseVerifyOptions(
-        string[] args,
-        [NotNullWhen(true)] out VerifyOptions? options,
-        [NotNullWhen(false)] out string? error)
-    {
-        options = null;
-        error = null;
-
-        string? inputPath = null;
-        string? outputPath = null;
-        int maxLineLength = DefaultMaxLineLength;
-
-        for (int i = 1; i < args.Length; i++)
-        {
-            string argument = args[i];
-            switch (argument)
-            {
-                case "--max-line":
-                    if (!TryTakeValue(args, ref i, argument, out string? maxLine, out error))
-                    {
-                        return false;
-                    }
-
-                    // Verify mode's fixed per-file buffer has a lower ceiling.
-                    if (!TryParseSize(maxLine, out long parsedMaxLine) || parsedMaxLine <= 0 || parsedMaxLine > VerifyMaxLineLengthCeiling)
-                    {
-                        error = $"--max-line expects a byte count between 1 and {VerifyMaxLineLengthCeiling}, optionally suffixed B, KiB, MiB or GiB, but got '{maxLine}'.";
-                        return false;
-                    }
-
-                    maxLineLength = (int)parsedMaxLine;
-                    break;
-
-                default:
-                    if (argument.StartsWith("--", StringComparison.Ordinal))
-                    {
-                        error = $"Unknown option '{argument}'.";
-                        return false;
-                    }
-
-                    if (inputPath is null)
-                    {
-                        inputPath = argument;
-                    }
-                    else if (outputPath is null)
-                    {
-                        outputPath = argument;
-                    }
-                    else
-                    {
-                        error = $"Unexpected argument '{argument}'; input and output are already '{inputPath}' and '{outputPath}'.";
-                        return false;
-                    }
-
-                    break;
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(inputPath))
-        {
-            error = "--verify requires an input path.";
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(outputPath))
-        {
-            error = "--verify requires an output path.";
-            return false;
-        }
-
-        options = new VerifyOptions(inputPath, outputPath, maxLineLength);
-        return true;
-    }
-
     // Windows and macOS volumes are case-insensitive by default. An unresolvable path is
     // not a match, so the code that opens it keeps reporting it as before.
     private static bool RefersToSameFile(string inputPath, string outputPath)
@@ -301,7 +205,7 @@ internal static class CommandLine
         }
     }
 
-    private static bool TryTakeValue(
+    internal static bool TryTakeValue(
         string[] args,
         ref int index,
         string option,
@@ -317,6 +221,54 @@ internal static class CommandLine
 
         value = args[++index];
         error = null;
+        return true;
+    }
+
+    // Takes a bare argument as the input path, then the output path. Both modes share it, so
+    // they reject unknown options and extra paths alike.
+    internal static bool TryTakePath(
+        string argument,
+        ref string? inputPath,
+        ref string? outputPath,
+        [NotNullWhen(false)] out string? error)
+    {
+        error = null;
+        if (argument.StartsWith("--", StringComparison.Ordinal))
+        {
+            error = $"Unknown option '{argument}'.";
+        }
+        else if (inputPath is null)
+        {
+            inputPath = argument;
+        }
+        else if (outputPath is null)
+        {
+            outputPath = argument;
+        }
+        else
+        {
+            error = $"Unexpected argument '{argument}'; input and output are already '{inputPath}' and '{outputPath}'.";
+        }
+
+        return error is null;
+    }
+
+    // Sort and verify mode differ only in the ceiling.
+    internal static bool TryParseMaxLine(
+        string text,
+        long ceiling,
+        out int maxLineLength,
+        [NotNullWhen(false)] out string? error)
+    {
+        maxLineLength = 0;
+        error = null;
+        if (!TryParseSize(text, out long bytes) || bytes <= 0 || bytes > ceiling)
+        {
+            error = $"--max-line expects a byte count between 1 and {ceiling}, optionally suffixed B, KiB, MiB or GiB, but got '{text}'.";
+            return false;
+        }
+
+        maxLineLength = (int)bytes;
         return true;
     }
 

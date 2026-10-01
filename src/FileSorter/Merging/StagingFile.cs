@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+using FileSorter.Startup;
 
 namespace FileSorter.Merging;
 
@@ -12,7 +12,7 @@ internal static class StagingFile
     {
         for (int attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            string candidate = $"{destinationPath}.{RandomSuffix()}.partial";
+            string candidate = $"{destinationPath}.{TemporaryRunSet.RandomSuffix()}.partial";
             if (!File.Exists(candidate))
             {
                 return candidate;
@@ -22,8 +22,8 @@ internal static class StagingFile
         throw new IOException($"Could not choose a staging file name beside '{destinationPath}' after {MaxAttempts} attempts.");
     }
 
-    // Removes only this staging file. Missing files are harmless; other cleanup failures
-    // remain visible to the caller.
+    // Removes only this partial file (a staging file or an incomplete merge output). Missing
+    // files are harmless; cleanup failures are reported without replacing the original error.
     public static void Delete(string stagingPath)
     {
         try
@@ -35,14 +35,7 @@ internal static class StagingFile
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Console.Error.WriteLine($"Could not remove the staging file at {stagingPath}: {ex.Message}");
+            Console.Error.WriteLine($"Could not remove the partial file at {stagingPath}: {ex.Message}");
         }
-    }
-
-    private static string RandomSuffix()
-    {
-        Span<byte> bytes = stackalloc byte[4];
-        RandomNumberGenerator.Fill(bytes);
-        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 }

@@ -1,5 +1,4 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Text;
 using FileSorter.LineFormat;
 
 namespace FileSorter.RunGeneration;
@@ -8,9 +7,6 @@ namespace FileSorter.RunGeneration;
 // before parsing reveals the preceding chunk's carry, which overlaps I/O and parsing.
 internal sealed class ChunkReader : IAsyncDisposable
 {
-    // Keep malformed-line diagnostics useful without printing a full line.
-    private const int PreviewMaxBytes = 128;
-
     private const byte CarriageReturn = (byte)'\r';
 
     [SuppressMessage(
@@ -300,17 +296,13 @@ internal sealed class ChunkReader : IAsyncDisposable
     // offset is buffer-relative, so add it to the file offset of buffer position zero.
     private static LineDescriptor Describe(byte[] buffer, int offset, int length, long fileOffsetOfBufferZero, long lineNumber)
     {
-        ReadOnlySpan<byte> line = buffer.AsSpan(offset, length);
-        if (!LineParser.TryParse(line, out long number, out int stringStart))
+        if (!LineDescriptor.TryCreate(buffer, offset, length, out LineDescriptor descriptor))
         {
-            ReadOnlySpan<byte> preview = line.Length > PreviewMaxBytes ? line[..PreviewMaxBytes] : line;
-            throw new MalformedLineException(fileOffsetOfBufferZero + offset, lineNumber, Encoding.UTF8.GetString(preview));
+            throw new MalformedLineException(
+                fileOffsetOfBufferZero + offset, lineNumber, MalformedLineException.PreviewOf(buffer.AsSpan(offset, length)));
         }
 
-        int stringOffset = offset + stringStart;
-        int stringLength = LineDescriptor.StringLengthOf(offset, length, stringOffset);
-        ulong prefix = LineDescriptor.BuildPrefix(buffer.AsSpan(stringOffset, stringLength));
-        return new LineDescriptor(prefix, number, offset, length, stringOffset);
+        return descriptor;
     }
 
     // Drain bytes already read from the forward-only stream before reading more. Callers
@@ -332,19 +324,10 @@ internal sealed class ChunkReader : IAsyncDisposable
             _pendingLength = remainingPending;
         }
 
-        int totalRead = fromPending;
-        while (totalRead < destinationLength)
-        {
-            int read = await _input.ReadAsync(buffer.AsMemory(destinationOffset + totalRead, destinationLength - totalRead), ct);
-            if (read == 0)
-            {
-                break;
-            }
-
-            totalRead += read;
-        }
-
-        return totalRead;
+        int fromInput = await _input.ReadAtLeastAsync(
+            buffer.AsMemory(destinationOffset + fromPending, destinationLength - fromPending),
+            destinationLength - fromPending, throwOnEndOfStream: false, ct);
+        return fromPending + fromInput;
     }
 
     public async ValueTask DisposeAsync()

@@ -302,8 +302,7 @@ public sealed class MergeExecutorTests : IDisposable
         string outputPath = Path.Combine(_directory, "output.tmp");
         await executor.ExecuteAsync(runPaths, outputPath, TestContext.Current.CancellationToken);
 
-        Assert.Equal(1, executor.MergeParallelismUsed);
-        Assert.Equal(0, executor.SplitterSeconds);   // the partitioner never ran
+        Assert.Null(executor.Partition);   // the partitioner never ran
         string[] expected = [.. Enumerable.Range(0, runCount).Select(i => $"{i}. L{i:D2}")];
         Assert.Equal(expected, File.ReadAllText(outputPath).Split('\n', StringSplitOptions.RemoveEmptyEntries));
     }
@@ -345,14 +344,14 @@ public sealed class MergeExecutorTests : IDisposable
             () => executor.ExecuteAsync(runPaths, outputPath, TestContext.Current.CancellationToken));
 
         Assert.Contains("merge worker", ex.Message, StringComparison.Ordinal);
-        Assert.Equal(3, executor.MergeParallelismUsed);
+        Assert.Equal(3, executor.Partition?.Workers);
         Assert.True(executor.OutputOpened);   // Program's own cleanup gate: this run did touch outputPath
     }
 
     [Fact]
     public async Task A_failing_partitioned_worker_surfaces_its_own_exception_and_leaves_no_run_handle_open()
     {
-        // RootCause's job is to pick the one real failure out of an aggregate that also
+        // PartitionedMerge.RootCause's job is to pick the one real failure out of an aggregate that also
         // holds the OperationCanceledExceptions this call's cancellation-of-siblings
         // produces. A fixture that fails every worker for the same reason at the same
         // instant does not exercise it, because the aggregate then holds no cancellation
@@ -391,7 +390,7 @@ public sealed class MergeExecutorTests : IDisposable
         // worker 2's slice), so they merge their own genuine slices of runA and runC to
         // completion -- real work, not a fast no-op -- and are then cancelled by worker 2's
         // failure while still awaiting their own I/O, which is exactly the sibling
-        // OperationCanceledException RootCause has to look past.
+        // OperationCanceledException PartitionedMerge.RootCause has to look past.
         using TemporaryRunSet runs = new(_directory);
         // Every line across all three runs below is exactly 20 bytes, "\n" included.
         string runA = WriteFixedWidthRun(runs, "aaa", count: 70_002);
@@ -411,7 +410,7 @@ public sealed class MergeExecutorTests : IDisposable
         string outputPath = Path.Combine(_directory, "output.tmp");
 
         // Catching this exact type rather than OperationCanceledException or an
-        // AggregateException is what confirms MergeExecutor.RootCause picked the real
+        // AggregateException is what confirms PartitionedMerge.RootCause picked the real
         // failure out of the two siblings' cancellations rather than surfacing
         // whichever Task.WhenAll happened to see first.
         MalformedLineException thrown = await Assert.ThrowsAsync<MalformedLineException>(
@@ -432,12 +431,11 @@ public sealed class MergeExecutorTests : IDisposable
         // The type check alone cannot distinguish "the partition never located, and
         // RangePartitioner.Locate threw this same exception type itself" from "the
         // partition succeeded and worker 2 hit the malformed line during its own real
-        // merge" -- both surface a MalformedLineException. MergeParallelismUsed is set
+        // merge" -- both surface a MalformedLineException. Partition is set
         // to the real worker count the instant Locate returns a partition, before any
-        // worker starts, and stays at its ExecuteAsync-entry value of 1 if Locate is
-        // what failed, so it is what confirms the partition was located and three
-        // workers started.
-        Assert.Equal(3, executor.MergeParallelismUsed);
+        // worker starts, and stays null if Locate is what failed, so it is what
+        // confirms the partition was located and three workers started.
+        Assert.Equal(3, executor.Partition?.Workers);
 
         foreach (string path in runPaths)
         {
@@ -489,10 +487,10 @@ public sealed class MergeExecutorTests : IDisposable
         // Confirms the partitioned path was actually taken rather than falling back to
         // the sequential one; without this, byte-identity alone would not distinguish
         // "the partition ran and agreed" from "the partition never ran at all."
-        Assert.Equal(workerCount, partitioned.MergeParallelismUsed);
+        Assert.Equal(workerCount, partitioned.Partition?.Workers);
         Assert.Equal(File.ReadAllBytes(sequentialOutput), File.ReadAllBytes(partitionedOutput));
 
-        if (OperatingSystem.IsWindows() && partitioned.OutputMarkedSparse)
+        if (OperatingSystem.IsWindows() && partitioned.Partition?.Sparse == true)
         {
             // Whether the finished file still carries the sparse attribute depends on
             // whether this machine's filesystem allows clearing it once every byte has
@@ -505,6 +503,61 @@ public sealed class MergeExecutorTests : IDisposable
             bool stillSparse = File.GetAttributes(partitionedOutput).HasFlag(FileAttributes.SparseFile);
             Assert.Equal(!clearingWorksHere, stillSparse);
         }
+    }
+
+    [Fact]
+    [Trait("Case", "MP-12")]
+    public async Task A_partition_with_an_empty_slice_is_merged_sequentially_with_identical_bytes()
+    {
+        // Every line equal: every splitter lands on the first line of each run, so workers 0
+        // to N-2 would get nothing and the last worker everything (COR-8). The executor must
+        // notice before it preallocates the output and take the sequential path. A control
+        // over distinct keys, with the same shape and plan, still partitions, so the
+        // fallback is the degenerate partition's doing and not the plan's.
+        const int runCount = 6;
+        const int linesPerRun = 2000;
+        const int workerCount = 4;
+
+        List<string>[] equal = [.. Enumerable.Range(0, runCount)
+            .Select(_ => Enumerable.Repeat("7. same\n", linesPerRun).ToList())];
+        List<string>[] distinct = [.. Enumerable.Range(0, runCount).Select(_ => new List<string>())];
+        for (int i = 0; i < runCount * linesPerRun; i++)
+        {
+            distinct[i % runCount].Add($"{i:D8}. run{i % runCount}\n");
+        }
+
+        (byte[] equalOutput, PartitionStats? equalStats) = await MergeAtAsync(equal, workerCount, "equal-4");
+        (byte[] equalSequential, PartitionStats? sequentialStats) = await MergeAtAsync(equal, 1, "equal-1");
+
+        Assert.NotNull(equalStats);
+        Assert.Equal(1, equalStats.Value.Workers);
+        Assert.True(double.IsPositiveInfinity(equalStats.Value.Imbalance));
+        Assert.False(equalStats.Value.Sparse);
+        Assert.Null(sequentialStats);
+        Assert.Equal(equalSequential, equalOutput);
+
+        string expected = string.Concat(Enumerable.Repeat("7. same\n", runCount * linesPerRun));
+        Assert.Equal(expected, System.Text.Encoding.UTF8.GetString(equalOutput));
+
+        (byte[] distinctOutput, PartitionStats? distinctStats) = await MergeAtAsync(distinct, workerCount, "distinct-4");
+        Assert.Equal(workerCount, distinctStats?.Workers);
+
+        // The string part is the primary key, so each run's "runK" lines form one block.
+        string distinctExpected = string.Concat(distinct.SelectMany(lines => lines));
+        Assert.Equal(distinctExpected, System.Text.Encoding.UTF8.GetString(distinctOutput));
+    }
+
+    private async Task<(byte[] Output, PartitionStats? Stats)> MergeAtAsync(
+        List<string>[] perRun, int mergeParallelism, string name)
+    {
+        string directory = Path.Combine(_directory, name);
+        using TemporaryRunSet runs = new(directory);
+        MergeExecutor executor = new(runs, PlanWith(fanIn: 128, mergeParallelism), maxLineLength: 63);
+        string outputPath = Path.Combine(directory, "output.tmp");
+        await executor.ExecuteAsync(WriteRuns(runs, perRun), outputPath, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, executor.PassesExecuted);
+        return (await File.ReadAllBytesAsync(outputPath, TestContext.Current.CancellationToken), executor.Partition);
     }
 
     private static List<string> WriteRuns(TemporaryRunSet runs, List<string>[] perRun)

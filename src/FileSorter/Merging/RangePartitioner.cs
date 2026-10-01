@@ -1,5 +1,4 @@
 using System.Runtime.ExceptionServices;
-using System.Text;
 using FileSorter.LineFormat;
 using Microsoft.Win32.SafeHandles;
 
@@ -16,9 +15,6 @@ namespace FileSorter.Merging;
 internal static class RangePartitioner
 {
     private const byte Newline = (byte)'\n';
-
-    // Long enough to be actionable, short enough not to dump a whole line into a console.
-    private const int PreviewMaxBytes = 128;
 
     // Initial probe size; the fill loop handles lines that exceed it.
     private const int FirstProbeBytes = 8 * 1024;
@@ -270,24 +266,17 @@ internal static class RangePartitioner
     // Local parsing retains this method's run-path diagnostics.
     private static LineDescriptor Describe(byte[] buffer, int offset, int length, long byteOffset, string runPath)
     {
-        ReadOnlySpan<byte> line = buffer.AsSpan(offset, length);
-        if (!LineParser.TryParse(line, out long number, out int stringStart))
+        if (!LineDescriptor.TryCreate(buffer, offset, length, out LineDescriptor descriptor))
         {
-            ReadOnlySpan<byte> preview = line.Length > PreviewMaxBytes ? line[..PreviewMaxBytes] : line;
-            throw new MalformedLineException(byteOffset, MalformedLineException.LineNumberUnavailable, Encoding.UTF8.GetString(preview), runPath);
+            throw new MalformedLineException(
+                byteOffset, MalformedLineException.LineNumberUnavailable, MalformedLineException.PreviewOf(buffer.AsSpan(offset, length)), runPath);
         }
 
-        int stringOffset = offset + stringStart;
-        int stringLength = LineDescriptor.StringLengthOf(offset, length, stringOffset);
-        ulong prefix = LineDescriptor.BuildPrefix(buffer.AsSpan(stringOffset, stringLength));
-        return new LineDescriptor(prefix, number, offset, length, stringOffset);
+        return descriptor;
     }
 
-    private static MalformedLineException Malformed(long byteOffset, byte[] probe, int filled, string runPath)
-    {
-        ReadOnlySpan<byte> offending = probe.AsSpan(0, Math.Min(filled, PreviewMaxBytes));
-        return new MalformedLineException(byteOffset, MalformedLineException.LineNumberUnavailable, Encoding.UTF8.GetString(offending), runPath);
-    }
+    private static MalformedLineException Malformed(long byteOffset, byte[] probe, int filled, string runPath) =>
+        new(byteOffset, MalformedLineException.LineNumberUnavailable, MalformedLineException.PreviewOf(probe.AsSpan(0, filled)), runPath);
 
     // The run whose byte range contains position, by binary search over the prefix sums
     // rather than a scan, since the run count reaches into the thousands.

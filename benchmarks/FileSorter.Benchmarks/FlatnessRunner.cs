@@ -248,7 +248,7 @@ internal static class FlatnessRunner
         }
         else if (runPaths.Count == 1)
         {
-            RunPlacement.Place(runPaths[0], outputPath, TryMove, runs);
+            RunPlacement.Place(runPaths[0], outputPath, runs);
         }
         else
         {
@@ -269,7 +269,7 @@ internal static class FlatnessRunner
     {
         // Match the production asynchronous input configuration.
         using FileStream input = new(
-            inputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1,
+            inputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: MemoryBudget.UnbufferedStream,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
         BufferPool pool = new(plan.ChunkSize, plan.DescriptorCapacity, plan.PoolCapacity);
@@ -289,17 +289,4 @@ internal static class FlatnessRunner
 
     private static RunGenerationStrategy CreateAkkaStrategy(IMaterializer materializer) =>
         (reader, spill, parallelism, token) => AkkaRunGeneration.RunAsync(reader, spill, parallelism, materializer, token);
-
-    private static bool TryMove(string from, string to)
-    {
-        try
-        {
-            File.Move(from, to);
-            return true;
-        }
-        catch (IOException)
-        {
-            return false;
-        }
-    }
 }

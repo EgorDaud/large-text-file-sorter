@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using FileSorter.LineFormat;
 using FileSorter.Startup;
 
@@ -6,8 +5,6 @@ namespace FileSorter.RunGeneration;
 
 internal sealed class ChunkSpiller
 {
-    private static readonly byte[] LineTerminator = [(byte)'\n'];
-
     private readonly TemporaryRunSet _runs;
     private readonly int _spillBufferSize;
 
@@ -36,9 +33,9 @@ internal sealed class ChunkSpiller
             }
 
             // The staging buffer below is the only write buffer in the memory plan, so
-            // FileStream uses one byte. CreateNew keeps an unexpected path collision visible.
+            // FileStream stays unbuffered. CreateNew keeps an unexpected path collision visible.
             await using FileStream file = new(
-                path, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 1,
+                path, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: MemoryBudget.UnbufferedStream,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
 
             // Preallocate the exact run length to avoid incremental file growth. Verify
@@ -47,22 +44,18 @@ internal sealed class ChunkSpiller
 
             // A spill needs its own staging buffer because one ChunkSpiller serves
             // concurrent calls. Each flush writes complete lines and observes cancellation.
-            byte[] staging = new byte[_spillBufferSize];
-            int stagedLength = 0;
+            LineStager stager = CreateFileStager(new byte[_spillBufferSize], file, ct);
             for (int i = 0; i < chunk.Count; i++)
             {
                 LineDescriptor line = lines[i];
-                if (!TryStageLine(staging, ref stagedLength, buffer.AsSpan(line.Offset, line.Length)))
+                if (!stager.TryAdd(buffer.AsSpan(line.Offset, line.Length)))
                 {
-                    stagedLength = await StageLineAsync(file, staging, stagedLength, buffer, line.Offset, line.Length, ct);
+                    await stager.AddAfterFlushAsync(buffer, line.Offset, line.Length);
                 }
             }
 
             // Flush the final staged lines because no later line can trigger it.
-            if (stagedLength > 0)
-            {
-                await file.WriteAsync(staging.AsMemory(0, stagedLength), ct);
-            }
+            await stager.FlushAsync();
 
             // A mismatched length would leave a zero-filled tail after SetLength.
             if (file.Position != totalBytes)
@@ -79,46 +72,8 @@ internal sealed class ChunkSpiller
         }
     }
 
-    // Stages a complete line without flushing. On failure it leaves the buffer unchanged
-    // so the caller can flush and retry.
-    private static bool TryStageLine(byte[] staging, ref int stagedLength, ReadOnlySpan<byte> line)
-    {
-        int needed = line.Length + 1;
-        if (stagedLength + needed > staging.Length)
-        {
-            return false;
-        }
-
-        line.CopyTo(staging.AsSpan(stagedLength));
-        stagedLength += line.Length;
-        staging[stagedLength] = LineTerminator[0];
-        stagedLength++;
-        return true;
-    }
-
-    // Flushes the buffer, or writes a line larger than the staging buffer directly.
-    private static async ValueTask<int> StageLineAsync(
-        FileStream file, byte[] staging, int stagedLength, byte[] source, int offset, int length, CancellationToken ct)
-    {
-        int needed = length + 1;
-        if (needed > staging.Length)
-        {
-            if (stagedLength > 0)
-            {
-                await file.WriteAsync(staging.AsMemory(0, stagedLength), ct);
-            }
-
-            await file.WriteAsync(source.AsMemory(offset, length), ct);
-            await file.WriteAsync(LineTerminator, ct);
-            return 0;
-        }
-
-        // TryStageLine failed only because this non-empty buffer lacked room.
-        Debug.Assert(stagedLength > 0, "TryStageLine returning false means something was already staged");
-        await file.WriteAsync(staging.AsMemory(0, stagedLength), ct);
-
-        source.AsSpan(offset, length).CopyTo(staging);
-        staging[length] = LineTerminator[0];
-        return length + 1;
-    }
+    // Builds the stager here so the write callback's closure belongs to this method rather
+    // than hoisting file and ct into the async SpillAsync.
+    private static LineStager CreateFileStager(byte[] buffer, FileStream file, CancellationToken ct) =>
+        new(buffer, data => file.WriteAsync(data, ct));
 }
