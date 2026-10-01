@@ -165,7 +165,8 @@ internal static class OutputVerifier
         while (violation is null)
         {
             int fillAmount = bufferSize - carryLength;
-            int freshCount = await FillAsync(stream, buffer, carryLength, fillAmount, ct);
+            int freshCount = await stream.ReadAtLeastAsync(
+                buffer.AsMemory(carryLength, fillAmount), fillAmount, throwOnEndOfStream: false, ct);
             int windowLength = carryLength + freshCount;
             bool exhausted = freshCount < fillAmount;
             streamPosition += freshCount;
@@ -248,23 +249,6 @@ internal static class OutputVerifier
         }
 
         return descriptor;
-    }
-
-    private static async Task<int> FillAsync(Stream stream, byte[] buffer, int offset, int count, CancellationToken ct)
-    {
-        int total = 0;
-        while (total < count)
-        {
-            int read = await stream.ReadAsync(buffer.AsMemory(offset + total, count - total), ct);
-            if (read == 0)
-            {
-                break;
-            }
-
-            total += read;
-        }
-
-        return total;
     }
 
     // FNV-1a arithmetic wraps modulo 2^64.

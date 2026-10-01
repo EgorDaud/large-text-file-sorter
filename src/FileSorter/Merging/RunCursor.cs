@@ -219,7 +219,8 @@ internal sealed class RunCursor : IAsyncDisposable
 
         int fillAmount = other.Length - carryLength;
         _prefetchCarryLength = carryLength;
-        _prefetchReadTask = FillAsync(other.AsMemory(carryLength, fillAmount), ct).AsTask();
+        _prefetchReadTask = _run.ReadAtLeastAsync(
+            other.AsMemory(carryLength, fillAmount), fillAmount, throwOnEndOfStream: false, ct).AsTask();
     }
 
     // Shifts carry and fills synchronously for the first window or buffered carry after EOF.
@@ -231,7 +232,10 @@ internal sealed class RunCursor : IAsyncDisposable
         }
 
         int fillAmount = buffer.Length - carryLength;
-        int read = _streamExhausted ? 0 : await FillAsync(buffer.AsMemory(carryLength, fillAmount), ct);
+        int read = _streamExhausted
+            ? 0
+            : await _run.ReadAtLeastAsync(
+                buffer.AsMemory(carryLength, fillAmount), fillAmount, throwOnEndOfStream: false, ct);
         if (read < fillAmount)
         {
             _streamExhausted = true;
@@ -256,22 +260,5 @@ internal sealed class RunCursor : IAsyncDisposable
 
         _linesRead++;
         return descriptor;
-    }
-
-    private async ValueTask<int> FillAsync(Memory<byte> destination, CancellationToken ct)
-    {
-        int totalRead = 0;
-        while (totalRead < destination.Length)
-        {
-            int read = await _run.ReadAsync(destination[totalRead..], ct);
-            if (read == 0)
-            {
-                break;
-            }
-
-            totalRead += read;
-        }
-
-        return totalRead;
     }
 }

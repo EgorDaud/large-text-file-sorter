@@ -120,7 +120,8 @@ internal sealed class TemporaryRunSet : IDisposable
         throw new IOException($"Could not create a private temporary directory beneath '{_directory}' after {MaxPrivateDirectoryAttempts} attempts.");
     }
 
-    private static string RandomSuffix()
+    // Shared with StagingFile so both name their files the same way.
+    internal static string RandomSuffix()
     {
         Span<byte> bytes = stackalloc byte[4];
         RandomNumberGenerator.Fill(bytes);

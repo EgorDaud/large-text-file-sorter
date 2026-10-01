@@ -324,19 +324,10 @@ internal sealed class ChunkReader : IAsyncDisposable
             _pendingLength = remainingPending;
         }
 
-        int totalRead = fromPending;
-        while (totalRead < destinationLength)
-        {
-            int read = await _input.ReadAsync(buffer.AsMemory(destinationOffset + totalRead, destinationLength - totalRead), ct);
-            if (read == 0)
-            {
-                break;
-            }
-
-            totalRead += read;
-        }
-
-        return totalRead;
+        int fromInput = await _input.ReadAtLeastAsync(
+            buffer.AsMemory(destinationOffset + fromPending, destinationLength - fromPending),
+            destinationLength - fromPending, throwOnEndOfStream: false, ct);
+        return fromPending + fromInput;
     }
 
     public async ValueTask DisposeAsync()

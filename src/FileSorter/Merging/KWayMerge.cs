@@ -6,8 +6,6 @@ namespace FileSorter.Merging;
 
 internal static class KWayMerge
 {
-    private static readonly byte[] LineTerminator = [(byte)'\n'];
-
     // Takes ownership of every run stream and disposes it on success or failure.
     public static async Task MergeAsync(
         IReadOnlyList<Stream> runs,
@@ -51,17 +49,16 @@ internal static class KWayMerge
             tree.Build();
 
             // Copy the winning line before advancing its cursor, so its buffer remains stable.
-            int stagedLength = 0;
+            LineStager stager = new(outputStagingBuffer, data => TimedWriteAsync(output, data, progress, ct));
             while (tree.WinnerIsAlive)
             {
                 int run = tree.Winner;
                 RunCursor runCursor = cursors[run]!;
                 LineDescriptor winner = runCursor.Current;
                 byte[] source = runCursor.Buffer;
-                if (!TryStageLine(outputStagingBuffer, ref stagedLength, source.AsSpan(winner.Offset, winner.Length)))
+                if (!stager.TryAdd(source.AsSpan(winner.Offset, winner.Length)))
                 {
-                    stagedLength = await StageLineAsync(
-                        output, outputStagingBuffer, stagedLength, source, winner.Offset, winner.Length, progress, ct);
+                    await stager.AddAfterFlushAsync(source, winner.Offset, winner.Length);
                 }
 
                 // Avoid the async state machine while the current window has descriptors.
@@ -78,10 +75,7 @@ internal static class KWayMerge
             }
 
             // Flush the final buffered terminator after all lines are staged.
-            if (stagedLength > 0)
-            {
-                await TimedWriteAsync(output, outputStagingBuffer.AsMemory(0, stagedLength), progress, ct);
-            }
+            await stager.FlushAsync();
         }
         catch
         {
@@ -125,51 +119,6 @@ internal static class KWayMerge
         }
 
         return disposalFailures?[0];
-    }
-
-    // Stages one line and its terminator without flushing. On failure it leaves the buffer
-    // unchanged for StageLineAsync to flush.
-    private static bool TryStageLine(byte[] staging, ref int stagedLength, ReadOnlySpan<byte> line)
-    {
-        int needed = line.Length + 1;
-        if (stagedLength + needed > staging.Length)
-        {
-            return false;
-        }
-
-        line.CopyTo(staging.AsSpan(stagedLength));
-        stagedLength += line.Length;
-        staging[stagedLength] = LineTerminator[0];
-        stagedLength++;
-        return true;
-    }
-
-    // Flushes before staging, or writes a line larger than the staging buffer directly.
-    private static async ValueTask<int> StageLineAsync(
-        Stream output, byte[] staging, int stagedLength, byte[] source, int offset, int length,
-        MergeProgress progress, CancellationToken ct)
-    {
-        int needed = length + 1;
-        if (needed > staging.Length)
-        {
-            if (stagedLength > 0)
-            {
-                await TimedWriteAsync(output, staging.AsMemory(0, stagedLength), progress, ct);
-            }
-
-            await TimedWriteAsync(output, source.AsMemory(offset, length), progress, ct);
-            await TimedWriteAsync(output, LineTerminator, progress, ct);
-            return 0;
-        }
-
-        // TryStageLine already ruled out fitting alongside what was staged before,
-        // so flushing here always empties a genuinely non-empty buffer.
-        Debug.Assert(stagedLength > 0, "TryStageLine returning false means something was already staged");
-        await TimedWriteAsync(output, staging.AsMemory(0, stagedLength), progress, ct);
-
-        source.AsSpan(offset, length).CopyTo(staging);
-        staging[length] = LineTerminator[0];
-        return length + 1;
     }
 
     // Measures every output write once for both byte and wait-time progress.

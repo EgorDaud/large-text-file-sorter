@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+using FileSorter.Startup;
 
 namespace FileSorter.Merging;
 
@@ -12,7 +12,7 @@ internal static class StagingFile
     {
         for (int attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            string candidate = $"{destinationPath}.{RandomSuffix()}.partial";
+            string candidate = $"{destinationPath}.{TemporaryRunSet.RandomSuffix()}.partial";
             if (!File.Exists(candidate))
             {
                 return candidate;
@@ -37,12 +37,5 @@ internal static class StagingFile
         {
             Console.Error.WriteLine($"Could not remove the staging file at {stagingPath}: {ex.Message}");
         }
-    }
-
-    private static string RandomSuffix()
-    {
-        Span<byte> bytes = stackalloc byte[4];
-        RandomNumberGenerator.Fill(bytes);
-        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 }
