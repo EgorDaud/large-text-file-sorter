@@ -66,12 +66,7 @@ internal static class Program
             // Report inaccessible input before allocating the sort buffers.
             using FileStream probe = File.OpenRead(options.InputPath);
         }
-        catch (IOException ex)
-        {
-            Console.Error.WriteLine($"Input file '{options.InputPath}' cannot be read: {ex.Message}");
-            return ExitCodes.InvalidArguments;
-        }
-        catch (UnauthorizedAccessException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Console.Error.WriteLine($"Input file '{options.InputPath}' cannot be read: {ex.Message}");
             return ExitCodes.InvalidArguments;
@@ -119,20 +114,6 @@ internal static class Program
 
         Stopwatch clock = Stopwatch.StartNew();
 
-        // Let RunPlacement fall back to a copy when the move fails.
-        Func<string, string, bool> tryMove = (from, to) =>
-        {
-            try
-            {
-                File.Move(from, to);
-                return true;
-            }
-            catch (IOException)
-            {
-                return false;
-            }
-        };
-
         try
         {
             if (options.Pipeline is Pipeline.Akka)
@@ -144,13 +125,13 @@ internal static class Program
                 using ActorSystem system = ActorSystem.Create("sorter", quiet);
                 IMaterializer materializer = system.Materializer();
                 await RunPhasesAsync(
-                    options, inputInfo, plan, runs, tryMove,
+                    options, inputInfo, plan, runs,
                     (reader, spill, parallelism, token) => AkkaRunGeneration.RunAsync(reader, spill, parallelism, materializer, token),
                     clock, ct);
             }
             else
             {
-                await RunPhasesAsync(options, inputInfo, plan, runs, tryMove, ChannelRunGeneration.RunAsync, clock, ct);
+                await RunPhasesAsync(options, inputInfo, plan, runs, ChannelRunGeneration.RunAsync, clock, ct);
             }
         }
         catch (DestinationReplaceFailedException ex)
@@ -169,7 +150,6 @@ internal static class Program
         FileInfo inputInfo,
         MemoryPlan plan,
         TemporaryRunSet runs,
-        Func<string, string, bool> tryMove,
         RunGenerationStrategy strategy,
         Stopwatch clock,
         CancellationToken ct)
@@ -186,39 +166,22 @@ internal static class Program
             // Honour a cancel that arrived after phase one, before any placement.
             ct.ThrowIfCancellationRequested();
 
-            if (runPaths.Count == 0)
-            {
-                string staging = StagingFile.CreatePath(options.OutputPath);
-                try
-                {
-                    using (new FileStream(staging, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                    {
-                    }
-
-                    try
-                    {
-                        File.Move(staging, options.OutputPath, overwrite: true);
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                    {
-                        // Include the requested output path in replacement errors.
-                        throw new DestinationReplaceFailedException(options.OutputPath, ex);
-                    }
-                }
-                catch
-                {
-                    StagingFile.Delete(staging);
-                    throw;
-                }
-            }
-            else if (runPaths.Count == 1)
+            if (runPaths.Count <= 1)
             {
                 try
                 {
-                    RunPlacement.Place(runPaths[0], options.OutputPath, tryMove, runs);
+                    if (runPaths.Count == 0)
+                    {
+                        RunPlacement.PlaceEmpty(options.OutputPath);
+                    }
+                    else
+                    {
+                        RunPlacement.Place(runPaths[0], options.OutputPath, runs);
+                    }
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
+                    // Include the requested output path in replacement errors.
                     throw new DestinationReplaceFailedException(options.OutputPath, ex);
                 }
             }
@@ -248,7 +211,7 @@ internal static class Program
             // that point must leave any existing output untouched.
             if (executor is { OutputOpened: true })
             {
-                DeletePartialOutput(options.OutputPath);
+                StagingFile.Delete(options.OutputPath);
             }
 
             throw;
@@ -258,20 +221,4 @@ internal static class Program
     // Keep budget calculation and minimum-budget diagnostics on the same estimate.
     private static int AssumedMeanFor(SorterOptions options) =>
         Math.Min(AssumedMeanLineLength, options.MaxLineLength);
-
-    // Report cleanup failures without replacing the original error.
-    private static void DeletePartialOutput(string path)
-    {
-        try
-        {
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-        }
-        catch (Exception removal)
-        {
-            Console.Error.WriteLine($"Could not remove the partial output at {path}: {removal.Message}");
-        }
-    }
 }

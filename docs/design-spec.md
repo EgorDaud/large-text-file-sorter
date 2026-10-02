@@ -388,7 +388,7 @@ internal sealed class ChunkSpiller
 
 Every slot handed to the spiller is released by the spiller, on both paths; together with `ChunkReader`'s `catch`, that is the whole release discipline.
 
-The run file is opened with `bufferSize: 1` like every read stream (D12): the `FileStream` buffers nothing, and a staging array sized at `SpillBufferSize` takes its place, each line and its terminator copied in and one `WriteAsync` issued per full buffer. Nothing else buffers a *write* the way a read-ahead buffer already buffers a read, which is why the staging array gets a budgeted allocation.
+The run file is opened with `MemoryBudget.UnbufferedStream` (`bufferSize: 1`) like every read stream (D12): the `FileStream` buffers nothing, and a staging array sized at `SpillBufferSize` takes its place, each line and its terminator copied in and one `WriteAsync` issued per full buffer. Nothing else buffers a *write* the way a read-ahead buffer already buffers a read, which is why the staging array gets a budgeted allocation.
 
 The run's final size is known before the first byte is written — the sum of each sorted line's length plus its terminator — so `SetLength` is called immediately after opening, turning a file grown 64 KiB at a time into one allocation. That is safe only because the total is exact by construction and checked: `SpillAsync` compares the stream's `Position` against it once every line is staged and throws on a mismatch, because a wrong-length run reads as a truncated last line rather than failing loudly.
 
@@ -574,8 +574,11 @@ One `MergeAsync` call is single-threaded by design; the only asynchrony inside i
 ```csharp
 internal static class RunPlacement
 {
-    /// tryMove returns false when the move cannot be performed, for example across volumes.
-    public static void Place(string runPath, string outputPath, Func<string, string, bool> tryMove);
+    /// tryMove defaults to File.Move and returns false when the move cannot be performed, for example across volumes.
+    public static void Place(string runPath, string outputPath, TemporaryRunSet runs, Func<string, string, bool>? tryMove = null);
+
+    /// Creates an empty output file the same atomic way.
+    public static void PlaceEmpty(string outputPath);
 }
 ```
 
@@ -583,7 +586,7 @@ The single-run shortcut: when phase one produced one run, phase two moves it to 
 
 ```csharp
 if (runPaths.Count == 1)
-    RunPlacement.Place(runPaths[0], options.OutputPath, TryMove);
+    RunPlacement.Place(runPaths[0], options.OutputPath, runs);
 else
     await executor.ExecuteAsync(runPaths, options.OutputPath, ct);
 ```
@@ -932,7 +935,7 @@ Cancellation in the sorter: `ConsoleRun` cancels the token on the first `Console
 | D9 | A pool slot owns both the byte buffer and the descriptor array; a chunk ends when either fills | Otherwise the descriptor array is a per-chunk LOH allocation and peak working set is a function of GC behaviour rather than configuration. Turns `assumedMeanLineLength` from a correctness assumption into a tuning parameter — one whose value decides, per chunk, which of `ChunkReader`'s two carry paths runs |
 | D10 | `MergeExecutor` drives the passes and owns intermediate runs; `TemporaryRunSet` lives in `Startup/` and is shared by both phases | Something has to execute a multi-pass plan, and temporary files belong to both phases rather than to phase one alone |
 | D11 | The holder releases: `ChunkReader` disposes a slot it never hands on, `ChunkSpiller` disposes every slot it receives | Any other rule leaks a slot when the reader throws on a malformed line, which is a guaranteed path on bad input rather than an edge case |
-| D12 | Every READ stream is opened `bufferSize: 1`; WRITE streams too, with a budgeted staging array (`SpillBufferSize`, `OutputBufferSize`) coalescing each line and its terminator instead. Phase two's buffers are allocated once in `MergeExecutor` and passed in | A `FileStream` buffer under an existing read-ahead buffer is unbudgeted work done twice. That argument is read-only: nothing buffers a write the way a read-ahead buffer buffers a read, so an unbuffered write stream alone would cost two syscalls per line. The staging buffer does that coalescing instead, which is what lets both sides stay unbuffered |
+| D12 | Every READ stream is opened with `MemoryBudget.UnbufferedStream` (`bufferSize: 1`); WRITE streams too, with a budgeted staging array (`SpillBufferSize`, `OutputBufferSize`) coalescing each line and its terminator instead. Phase two's buffers are allocated once in `MergeExecutor` and passed in | A `FileStream` buffer under an existing read-ahead buffer is unbudgeted work done twice. That argument is read-only: nothing buffers a write the way a read-ahead buffer buffers a read, so an unbuffered write stream alone would cost two syscalls per line. The staging buffer does that coalescing instead, which is what lets both sides stay unbuffered |
 | D13 | A strategy surfaces the first branch failure as the original exception, unwrapped; the streaming tier asserts exception-type identity across both | Otherwise `Parallel.ForEachAsync`'s `AggregateException` and Akka's fault route give the same corrupt file different exit codes. `await` unwraps the Channels path for free; it is Akka's materialized task that needs the explicit peel |
 | D14 | `Program` owns the single-run branch; `MergeExecutor` takes no `tryMove` | A parameter threaded two levels for one branch's benefit, and MP-05 already describes the single run as bypassing the merge entirely |
 | D15 | `FileWriter.Write` takes an optional `Action<long>? onProgress` | Progress on stderr is required for both programs; it is the seam the write loop reports through. A hundred gigabytes is several silent minutes otherwise. Amended: `Write` also takes a `CancellationToken`, polled with the progress report, so the generator can return 130 (see the exit-code prose) |

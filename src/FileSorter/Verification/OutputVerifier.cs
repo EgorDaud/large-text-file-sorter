@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using FileSorter.LineFormat;
+using FileSorter.Startup;
 
 namespace FileSorter.Verification;
 
@@ -27,10 +28,10 @@ internal static class OutputVerifier
     public static async Task<VerificationResult> RunAsync(VerifyOptions options, CancellationToken ct)
     {
         using FileStream input = new(
-            options.InputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1,
+            options.InputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: MemoryBudget.UnbufferedStream,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         using FileStream output = new(
-            options.OutputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1,
+            options.OutputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: MemoryBudget.UnbufferedStream,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
         long inputBytes = input.Length;

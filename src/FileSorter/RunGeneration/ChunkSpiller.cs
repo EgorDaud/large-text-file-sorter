@@ -33,9 +33,9 @@ internal sealed class ChunkSpiller
             }
 
             // The staging buffer below is the only write buffer in the memory plan, so
-            // FileStream uses one byte. CreateNew keeps an unexpected path collision visible.
+            // FileStream stays unbuffered. CreateNew keeps an unexpected path collision visible.
             await using FileStream file = new(
-                path, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 1,
+                path, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: MemoryBudget.UnbufferedStream,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
 
             // Preallocate the exact run length to avoid incremental file growth. Verify

@@ -41,14 +41,10 @@ public sealed class RunPlacementTests : IDisposable
         byte[] bytes = [1, 2, 3, 4, 5];
         File.WriteAllBytes(runPath, bytes);
 
-        // tryMove performs the real move itself; Place is then only required to
+        // The default tryMove performs the real move; Place is then only required to
         // return. If it went on to copy runPath afterwards, this would throw,
         // because the move has already made runPath disappear.
-        RunPlacement.Place(runPath, outputPath, (from, to) =>
-        {
-            File.Move(from, to);
-            return true;
-        }, _runs);
+        RunPlacement.Place(runPath, outputPath, _runs);
 
         Assert.Equal(bytes, File.ReadAllBytes(outputPath));
         Assert.False(File.Exists(runPath));
@@ -64,7 +60,7 @@ public sealed class RunPlacementTests : IDisposable
         File.WriteAllBytes(runPath, bytes);
 
         Exception? thrown = Record.Exception(() =>
-            RunPlacement.Place(runPath, outputPath, (_, _) => false, _runs));
+            RunPlacement.Place(runPath, outputPath, _runs, (_, _) => false));
 
         Assert.Null(thrown);
         Assert.Equal(bytes, File.ReadAllBytes(outputPath));
@@ -91,7 +87,7 @@ public sealed class RunPlacementTests : IDisposable
         {
             using (new FileStream(runPath, FileMode.Open, FileAccess.Read, FileShare.Read))
             {
-                Exception? thrown = Record.Exception(() => RunPlacement.Place(runPath, outputPath, (_, _) => false, _runs));
+                Exception? thrown = Record.Exception(() => RunPlacement.Place(runPath, outputPath, _runs, (_, _) => false));
                 Assert.Null(thrown);
             }
         }
@@ -124,7 +120,7 @@ public sealed class RunPlacementTests : IDisposable
         Console.SetError(capturedError);
         try
         {
-            Exception? thrown = Record.Exception(() => RunPlacement.Place(runPath, outputPath, (_, _) => false, _runs));
+            Exception? thrown = Record.Exception(() => RunPlacement.Place(runPath, outputPath, _runs, (_, _) => false));
             Assert.Null(thrown);
         }
         finally
@@ -153,7 +149,7 @@ public sealed class RunPlacementTests : IDisposable
         string outputPath = Path.Combine(_directory, "output.tmp");
         File.WriteAllBytes(runPath, [1, 2, 3]);
 
-        RunPlacement.Place(runPath, outputPath, (_, _) => false, _runs);
+        RunPlacement.Place(runPath, outputPath, _runs, (_, _) => false);
 
         Assert.Empty(Directory.GetFiles(_directory, "*.partial"));
     }
@@ -168,7 +164,7 @@ public sealed class RunPlacementTests : IDisposable
         byte[] newContent = [1, 2, 3];
         File.WriteAllBytes(runPath, newContent);
 
-        RunPlacement.Place(runPath, outputPath, (_, _) => false, _runs);
+        RunPlacement.Place(runPath, outputPath, _runs, (_, _) => false);
 
         Assert.Equal(newContent, File.ReadAllBytes(outputPath));
     }
@@ -192,7 +188,7 @@ public sealed class RunPlacementTests : IDisposable
         using (new FileStream(outputPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
         {
             Assert.Throws<UnauthorizedAccessException>(
-                () => RunPlacement.Place(runPath, outputPath, (_, _) => false, _runs));
+                () => RunPlacement.Place(runPath, outputPath, _runs, (_, _) => false));
         }
 
         Assert.Equal(previousContent, File.ReadAllBytes(outputPath));
@@ -206,13 +202,50 @@ public sealed class RunPlacementTests : IDisposable
         string movedRun = Path.Combine(_directory, "moved.tmp");
         string movedOutput = Path.Combine(_directory, "moved-output.tmp");
         File.WriteAllBytes(movedRun, [1]);
-        RunPlacement.Place(movedRun, movedOutput, (from, to) => { File.Move(from, to); return true; }, _runs);
+        RunPlacement.Place(movedRun, movedOutput, _runs);
         Assert.False(File.Exists(movedRun));
 
         string copiedRun = Path.Combine(_directory, "copied.tmp");
         string copiedOutput = Path.Combine(_directory, "copied-output.tmp");
         File.WriteAllBytes(copiedRun, [2]);
-        RunPlacement.Place(copiedRun, copiedOutput, (_, _) => false, _runs);
+        RunPlacement.Place(copiedRun, copiedOutput, _runs, (_, _) => false);
         Assert.False(File.Exists(copiedRun));
+    }
+
+    [Fact]
+    [Trait("Case", "KM-23")]
+    public void PlaceEmpty_creates_an_empty_output_or_replaces_an_existing_one_and_leaves_no_staging_file()
+    {
+        string created = Path.Combine(_directory, "created.tmp");
+        RunPlacement.PlaceEmpty(created);
+        Assert.True(File.Exists(created));
+        Assert.Empty(File.ReadAllBytes(created));
+
+        string replaced = Path.Combine(_directory, "replaced.tmp");
+        File.WriteAllBytes(replaced, [9, 9, 9]);
+        RunPlacement.PlaceEmpty(replaced);
+        Assert.Empty(File.ReadAllBytes(replaced));
+
+        Assert.Empty(Directory.GetFiles(_directory, "*.partial"));
+    }
+
+    [Fact]
+    [Trait("Case", "KM-24")]
+    public void PlaceEmpty_throws_for_an_unreplaceable_destination_and_leaves_it_and_no_staging_file()
+    {
+        // Same Windows-only write denial as KM-21. Program maps this exception to exit 3.
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "FileShare-based write denial is a Windows sharing-mode concept.");
+
+        string outputPath = Path.Combine(_directory, "output.tmp");
+        byte[] previousContent = [9, 9, 9, 9];
+        File.WriteAllBytes(outputPath, previousContent);
+
+        using (new FileStream(outputPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+        {
+            Assert.Throws<UnauthorizedAccessException>(() => RunPlacement.PlaceEmpty(outputPath));
+        }
+
+        Assert.Equal(previousContent, File.ReadAllBytes(outputPath));
+        Assert.Empty(Directory.GetFiles(_directory, "*.partial"));
     }
 }

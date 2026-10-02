@@ -186,7 +186,7 @@ internal sealed class MergeExecutor
             {
                 // Cursor buffers handle read-ahead; asynchronous sequential reads match run use.
                 inputs[i] = new FileStream(
-                    current[group[i]], FileMode.Open, FileAccess.Read, FileShare.None, bufferSize: 1,
+                    current[group[i]], FileMode.Open, FileAccess.Read, FileShare.None, bufferSize: MemoryBudget.UnbufferedStream,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
 
                 // Runs have one LF terminator per line. A preceding CR is content, so input
@@ -194,11 +194,11 @@ internal sealed class MergeExecutor
                 totalBytes += inputs[i].Length;
             }
 
-            // KWayMerge owns the output buffer, so FileStream uses bufferSize 1. Intermediate
+            // KWayMerge owns the output buffer, so FileStream stays unbuffered. Intermediate
             // private run paths require CreateNew; the final output path may replace a file.
             FileMode mode = isOutputDestination ? FileMode.Create : FileMode.CreateNew;
             output = new FileStream(
-                destination, mode, FileAccess.Write, FileShare.None, bufferSize: 1,
+                destination, mode, FileAccess.Write, FileShare.None, bufferSize: MemoryBudget.UnbufferedStream,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
 
             // The output path is touched as soon as its stream opens.

@@ -3,7 +3,7 @@ using System.Globalization;
 
 namespace FileSorter.Startup;
 
-// Parses sort-mode options and the size syntax VerifyOptions shares. Program prints usage
+// Parses sort-mode options and the size, path and --max-line syntax VerifyOptions shares. Program prints usage
 // when parsing fails.
 internal static class CommandLine
 {
@@ -106,13 +106,11 @@ internal static class CommandLine
                         return false;
                     }
 
-                    if (!TryParseSize(maxLine, out long parsedMaxLine) || parsedMaxLine <= 0 || parsedMaxLine > MaxLineLengthCeiling)
+                    if (!TryParseMaxLine(maxLine, MaxLineLengthCeiling, out maxLineLength, out error))
                     {
-                        error = $"--max-line expects a byte count between 1 and {MaxLineLengthCeiling}, optionally suffixed B, KiB, MiB or GiB, but got '{maxLine}'.";
                         return false;
                     }
 
-                    maxLineLength = (int)parsedMaxLine;
                     break;
 
                 case "--parallelism":
@@ -153,23 +151,8 @@ internal static class CommandLine
                     break;
 
                 default:
-                    if (argument.StartsWith("--", StringComparison.Ordinal))
+                    if (!TryTakePath(argument, ref inputPath, ref outputPath, out error))
                     {
-                        error = $"Unknown option '{argument}'.";
-                        return false;
-                    }
-
-                    if (inputPath is null)
-                    {
-                        inputPath = argument;
-                    }
-                    else if (outputPath is null)
-                    {
-                        outputPath = argument;
-                    }
-                    else
-                    {
-                        error = $"Unexpected argument '{argument}'; input and output are already '{inputPath}' and '{outputPath}'.";
                         return false;
                     }
 
@@ -238,6 +221,54 @@ internal static class CommandLine
 
         value = args[++index];
         error = null;
+        return true;
+    }
+
+    // Takes a bare argument as the input path, then the output path. Both modes share it, so
+    // they reject unknown options and extra paths alike.
+    internal static bool TryTakePath(
+        string argument,
+        ref string? inputPath,
+        ref string? outputPath,
+        [NotNullWhen(false)] out string? error)
+    {
+        error = null;
+        if (argument.StartsWith("--", StringComparison.Ordinal))
+        {
+            error = $"Unknown option '{argument}'.";
+        }
+        else if (inputPath is null)
+        {
+            inputPath = argument;
+        }
+        else if (outputPath is null)
+        {
+            outputPath = argument;
+        }
+        else
+        {
+            error = $"Unexpected argument '{argument}'; input and output are already '{inputPath}' and '{outputPath}'.";
+        }
+
+        return error is null;
+    }
+
+    // Sort and verify mode differ only in the ceiling.
+    internal static bool TryParseMaxLine(
+        string text,
+        long ceiling,
+        out int maxLineLength,
+        [NotNullWhen(false)] out string? error)
+    {
+        maxLineLength = 0;
+        error = null;
+        if (!TryParseSize(text, out long bytes) || bytes <= 0 || bytes > ceiling)
+        {
+            error = $"--max-line expects a byte count between 1 and {ceiling}, optionally suffixed B, KiB, MiB or GiB, but got '{text}'.";
+            return false;
+        }
+
+        maxLineLength = (int)bytes;
         return true;
     }
 

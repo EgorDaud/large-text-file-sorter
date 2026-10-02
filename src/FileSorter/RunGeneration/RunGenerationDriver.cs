@@ -18,7 +18,7 @@ internal static class RunGenerationDriver
         CancellationToken ct)
     {
         using FileStream input = new(
-            options.InputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1,
+            options.InputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: MemoryBudget.UnbufferedStream,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
         BufferPool pool = new(plan.ChunkSize, plan.DescriptorCapacity, plan.PoolCapacity);

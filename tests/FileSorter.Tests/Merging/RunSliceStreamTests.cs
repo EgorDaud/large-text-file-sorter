@@ -2,6 +2,7 @@ using System.Text;
 using CsCheck;
 using FileSorter.LineFormat;
 using FileSorter.Merging;
+using FileSorter.Startup;
 using Xunit;
 
 namespace FileSorter.Tests.Merging;
@@ -165,7 +166,7 @@ public sealed class RunSliceStreamTests : IDisposable
         // in PartitionedMerge.MergeSliceAsync, so disposing the cursor is what closes the
         // handle -- there is no second owner here to hide a leak behind.
         List<string> delivered = [];
-        FileStream file = new(path, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1, FileOptions.Asynchronous);
+        FileStream file = new(path, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: MemoryBudget.UnbufferedStream, FileOptions.Asynchronous);
         RunCursorBuffers buffers = new(
             new byte[windowSize], new byte[windowSize], new LineDescriptor[descriptorCapacity]);
         RunCursor cursor = new(new RunSliceStream(file, start, end), buffers, MaxLineLength);

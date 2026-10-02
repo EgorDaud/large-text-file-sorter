@@ -36,33 +36,16 @@ internal sealed record VerifyOptions(string InputPath, string OutputPath, int Ma
                     }
 
                     // Verify mode's fixed per-file buffer has a lower ceiling.
-                    if (!CommandLine.TryParseSize(maxLine, out long parsedMaxLine) || parsedMaxLine <= 0 || parsedMaxLine > MaxLineLengthCeiling)
+                    if (!CommandLine.TryParseMaxLine(maxLine, MaxLineLengthCeiling, out maxLineLength, out error))
                     {
-                        error = $"--max-line expects a byte count between 1 and {MaxLineLengthCeiling}, optionally suffixed B, KiB, MiB or GiB, but got '{maxLine}'.";
                         return false;
                     }
 
-                    maxLineLength = (int)parsedMaxLine;
                     break;
 
                 default:
-                    if (argument.StartsWith("--", StringComparison.Ordinal))
+                    if (!CommandLine.TryTakePath(argument, ref inputPath, ref outputPath, out error))
                     {
-                        error = $"Unknown option '{argument}'.";
-                        return false;
-                    }
-
-                    if (inputPath is null)
-                    {
-                        inputPath = argument;
-                    }
-                    else if (outputPath is null)
-                    {
-                        outputPath = argument;
-                    }
-                    else
-                    {
-                        error = $"Unexpected argument '{argument}'; input and output are already '{inputPath}' and '{outputPath}'.";
                         return false;
                     }
 

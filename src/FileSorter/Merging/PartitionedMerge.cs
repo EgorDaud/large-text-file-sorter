@@ -83,7 +83,7 @@ internal sealed class PartitionedMerge
         // Preallocate once so worker offsets are stable and no worker extends the file.
         bool sparse;
         using (FileStream preallocate = new(
-                   outputPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, bufferSize: 1))
+                   outputPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, bufferSize: MemoryBudget.UnbufferedStream))
         {
             // The output path is now touched even if later setup fails.
             OutputOpened = true;
@@ -216,7 +216,7 @@ internal sealed class PartitionedMerge
 
                 // Cursor read-ahead buffers already provide buffering.
                 FileStream file = new(
-                    runPaths[r], FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1,
+                    runPaths[r], FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: MemoryBudget.UnbufferedStream,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
                 inputs.Add(new RunSliceStream(file, start, end));
                 buffers.Add(new RunCursorBuffers(
@@ -228,7 +228,7 @@ internal sealed class PartitionedMerge
 
             long sliceStart = partition.OutputOffsets[worker];
             destination = new FileStream(
-                outputPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, bufferSize: 1,
+                outputPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, bufferSize: MemoryBudget.UnbufferedStream,
                 FileOptions.Asynchronous);
             output = new OutputSliceStream(destination, sliceStart, sliceStart + partition.SliceBytes[worker]);
 
