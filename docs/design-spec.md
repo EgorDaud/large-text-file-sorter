@@ -37,8 +37,9 @@ No shared class library. The two programs share only the knowledge that the sepa
 
 ```
 FileSorter/
-  Program.cs                      dispatch (--help, --verify, sort mode), the budgetBytes
-                                  catch, phase-two branch, ActorSystem lifetime
+  Program.cs                      dispatch (--help, --verify, sort mode), startup validation, the
+                                  pipeline branch (the ActorSystem exists only in the akka branch),
+                                  and RunPhasesAsync: run generation, then placement or merge
   Startup/
     CommandLine.cs                sort-mode argument parsing, and the size-suffix parser verify mode reuses
     ConsoleRun.cs                 Ctrl+C and SIGTERM wiring, and the exception-to-exit-code ladder
@@ -48,7 +49,7 @@ FileSorter/
     ProgressReporter.cs           the byte-count formatter, the reporting interval, and RunWithProgressAsync,
                                   which runs a phase beside its periodic reporter
     SorterOptions.cs
-    MemoryBudget.cs               MemoryPlan Calculate(...)
+    MemoryBudget.cs               MemoryPlan Calculate(...), and TryCalculate(...) for the CLI path
     MemoryPlan.cs
     TempCapacity.cs               CapacityDecision Evaluate(...) and its two volume-specific forms
     TemporaryRunSet.cs            temp file creation and cleanup, used by both phases
@@ -467,15 +468,19 @@ The case, at its real strength rather than inflated. Two of these three would be
 `Program` builds the strategy inside the branch that owns Akka's resources, so `--pipeline channels` never constructs an `ActorSystem` and no nullable materializer is ever in scope:
 
 ```csharp
+// RunAsync, after validation: options, plan and runs are already in hand.
 if (options.Pipeline is Pipeline.Akka)
 {
-    using var system = ActorSystem.Create("sorter");
-    using var materializer = system.Materializer();
-    return await SortAsync(options, (r, s, p, ct) =>
-        AkkaRunGeneration.RunAsync(r, s, p, materializer, ct), ct);
+    using ActorSystem system = ActorSystem.Create("sorter", quietConfig);   // akka.loglevel = OFF
+    IMaterializer materializer = system.Materializer();
+    await RunPhasesAsync(options, inputInfo, plan, runs, (r, s, p, ct) =>
+        AkkaRunGeneration.RunAsync(r, s, p, materializer, ct), clock, ct);
 }
-return await SortAsync(options, ChannelRunGeneration.RunAsync, ct);
+else   // channels, the default
+    await RunPhasesAsync(options, inputInfo, plan, runs, ChannelRunGeneration.RunAsync, clock, ct);
 ```
+
+`Main` only dispatches: `--verify` goes to `VerifyCommand`, and sort mode goes through `ConsoleRun.Run`, which owns the cancellation wiring and the exception-to-exit-code ladder, into `RunAsync`. That method validates (input, `MemoryBudget.TryCalculate`, destinations, capacity) before the branch above; `RunPhasesAsync` then generates the runs and either places them (`RunPlacement.PlaceEmpty` or `Place`) or hands them to `MergeExecutor`, which takes the `PartitionedMerge` path when the plan allows.
 
 Run order from a strategy is undefined — both schedulers complete out of order and `MergeExecutor` treats the list as a set. The honest limit: two implementations demonstrate that a behaviour is not scheduler-specific; they do not demonstrate that either is correct under interleavings neither happened to produce.
 
@@ -738,7 +743,7 @@ internal sealed class OutputSliceStream : Stream { /* write-only view of [start,
 
 **Failure and ownership.** The first worker to fail cancels its siblings, so the rest stop reading gigabytes into an output about to be deleted; the exception handed back is picked out of the aggregate as the first that is not an `OperationCanceledException`, unless the caller's own token was cancelled (D13's rule). Run files are opened `FileShare.Read` here rather than `None`, because every worker opens every run at once. The deletion contract is unchanged and is what that share still protects: `MergeAsync` disposes every stream on both paths, each worker disposes its own output, and no run is deleted until `Task.WhenAll` has observed every worker finish.
 
-**Open handle count.** Every worker opens every run of its group, so the ceiling is `MergeParallelism × MaxMergeFanIn` — up to 16,384 at the shipped 8/2,048 pair — against the sequential path's 2,048. `SafeFileHandle` wraps a kernel handle table entry directly rather than going through the C runtime's descriptor table, so neither is close to a real ceiling on Windows; the 20 GiB run peaked at 1,488.
+**Open handle count.** Every worker opens every run of its group, so the ceiling is `MergeParallelism × MaxMergeFanIn` — up to 16,384 at the shipped 8/2,048 pair — against the sequential path's 2,048. `SafeFileHandle` wraps a kernel handle table entry directly rather than going through the C runtime's descriptor table, so neither is close to a real ceiling on Windows; the 20 GiB run peaked at 1,488. **On Linux the limit is `RLIMIT_NOFILE`, and this was not measured there.** The expectation is that the .NET runtime raises the soft limit to the hard limit at startup, which would cover the ceiling on a stock system; that is not confirmed from the runtime's documentation, so the requirement is stated instead: `ulimit -n` must allow about 8 × 2,048 handles plus a margin (say 17,000), or a partitioned merge at full fan-in can fail to open its runs, which surfaces as an I/O failure (exit 5).
 
 ---
 
@@ -854,9 +859,9 @@ internal static class FileWriter
 
 There is no maximum-line-length option. The generator composes from a fixed `Vocabulary` with canonical decimal numbers, so nothing it can produce approaches 64 KiB and no path in `TryComposeNext` could be driven to violate a limit — a knob that is parsed, stored and never consumed advertises behaviour that does not exist. `onProgress` is how section 10's progress requirement reaches a synchronous write loop (D15).
 
-`TryComposeNext` returning `false` **is** the sizing rule: the output is the largest whole number of complete lines, each terminated, that does not exceed the target. It never overshoots and never truncates a line to hit the target exactly, because a truncated final line would be malformed and the sorter would reject the generator's own output on its last line.
+`TryComposeNext` returning `false` **is** the sizing rule: the output is whole lines, each terminated, up to the first composed line that does not fit the target. It never overshoots and never truncates a line to hit the target exactly, so it can end up to one line short of the target (a shorter line might have fitted, but the draw is made before sizing, and stopping there keeps the seeded sequence independent of the target). A truncated final line would be malformed and the sorter would reject the generator's own output on its last line.
 
-String parts are drawn from `Vocabulary` using a seeded `Random`. Duplicates are guaranteed at two scales, both by construction rather than left to the chance that a random draw repeats. Across a whole file the configured ratio is a measured proportion. A proportion needs enough lines to mean anything, so a positive ratio *additionally and unconditionally* composes the file's first two lines as a forced pair sharing one pool entry, ahead of every probabilistic draw. Two candidate pairs are drawn every time regardless of the target — the pair an ordinary two lines would produce, and a minimal pair from the shortest pool entry and two single-digit numbers — and whichever fits is written, the ordinary pair preferred. The guarantee therefore holds precisely when the target can hold the two shortest lines that can share an entry; below that the file is simply too small to carry it, which is not an error. **Both candidates are drawn from the same seeded `Random` every time regardless of which is used**, so the sequence that follows never depends on the target size. A ratio of exactly zero disables both and stays a distinct-data mode.
+String parts are drawn from `Vocabulary` using a seeded `Random`. The same seed reproduces the same bytes only on the same .NET version: `System.Random`'s seeded sequence is not promised stable across major versions, and replacing it with an owned PRNG was considered and rejected because it would invalidate the recorded baselines. Duplicates are guaranteed at two scales, both by construction rather than left to the chance that a random draw repeats. Across a whole file the configured ratio is a measured proportion. A proportion needs enough lines to mean anything, so a positive ratio *additionally and unconditionally* composes the file's first two lines as a forced pair sharing one pool entry, ahead of every probabilistic draw. Two candidate pairs are drawn every time regardless of the target — the pair an ordinary two lines would produce, and a minimal pair from the shortest pool entry and two single-digit numbers — and whichever fits is written, the ordinary pair preferred. The guarantee therefore holds precisely when the target can hold the two shortest lines that can share an entry; below that the file is simply too small to carry it, which is not an error. **Both candidates are drawn from the same seeded `Random` every time regardless of which is used**, so the sequence that follows never depends on the target size. A ratio of exactly zero disables both and stays a distinct-data mode.
 
 Numbers are written in canonical decimal with no leading zeros, so generated data never exercises the third comparison level. That level is reachable only from hand-written fixtures, which is why OC-13 and OC-17 are unit cases and cannot be delegated to the property test.
 

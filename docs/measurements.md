@@ -4,7 +4,7 @@ Every number the README's "Results" section refers to, measured on one machine, 
 
 **Machine.** AMD Ryzen 7 7840HS, 8 physical / 16 logical cores. Windows 11. .NET 10.0.11. NVMe SSD. Release builds, one sort at a time, input, temporary files and output on the same volume.
 
-**Input.** `TestFileGenerator` at seed 42, average line length 37.64 bytes. The 20 GiB file holds 570,483,043 lines and hashes to `2e91107033e198d4`; the 100 GiB file is described in section 2.
+**Input.** `TestFileGenerator` at seed 42, average line length 37.64 bytes. The 20 GiB file holds 570,483,043 lines and hashes to `2e91107033e198d4`; the 100 GiB file is described in section 2. That hash holds only on this .NET version: the generator's `System.Random` sequence is not promised stable across major versions, so a different runtime may produce a different file for the same seed.
 
 **Benchmark input changed on 2026-10-02.** The in-process benchmarks and `-- --flatness` used to generate their input from a hand-rolled ten-word ASCII vocabulary. They now call `TestFileGenerator`'s own `LineComposer` (seeded, default 0.1 duplicate ratio), so their data has the shipped file's shape. Benchmark and flatness figures recorded before 2026-10-02 used the old vocabulary and are not directly comparable with figures taken after it; they are left as recorded.
 
@@ -41,7 +41,7 @@ Ten consecutive sorts at `--memory 4GiB` on the `akka` pipeline (the default whe
 | Output bytes | 21,474,836,456 |
 | Temporary files left behind | 0 |
 
-**The output verifies**: 570,483,043 lines and hash `2e91107033e198d4` on both sides. The suite passes: 492 tests, none skipped, warnings as errors.
+**The output verifies**: 570,483,043 lines and hash `2e91107033e198d4` on both sides. The suite passed at the time of the measurement: 492 tests, none skipped, warnings as errors.
 
 **Twenty back-to-back sorts leave the drive no time to recover, and the totals show it.** The first run finished in 56.3 s with 27.8 s of summed output-wait; the rest sat between 67 and 75 s with three to four times that wait. Phase one, the CPU-bound half, moved far less: 30.6 s to 41.2 s.
 
