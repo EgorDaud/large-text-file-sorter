@@ -190,7 +190,7 @@ Decisions on what the assignment leaves open; [docs/test-strategy.md](docs/test-
 - **`--memory` and `--parallelism` must be chosen together.** A budget too small for the fixed write-buffer cost is rejected with the minimum that would work, rather than silently lowering parallelism, which would let a *larger* budget produce a *smaller* chunk.
 - **Re-sorting the sorter's own output is not a fixpoint.** A content `\r` before the `\n` reads back as half a terminator; that is the format's ambiguity, pinned by `SortRoundTripTests` (ET-05).
 
-Smaller accepted costs: the radix sort's ~6% penalty on long runs of byte-identical string parts ([measurements](docs/measurements.md#6-inside-the-chunk-sort)), the splitter search's brief 16 MiB allocation outside the guarantee and the partitioned merge's larger handle count ([design spec](docs/design-spec.md#77-rangepartitioner-and-the-partitioned-merge)), and disk exhaustion after the startup check ([test strategy](docs/test-strategy.md#residual-risks)).
+Smaller accepted costs: the radix sort's 6–11% penalty when every string part is identical ([measurements](docs/measurements.md#6-inside-the-chunk-sort)), the splitter search's brief 16 MiB allocation outside the guarantee and the partitioned merge's larger handle count ([design spec](docs/design-spec.md#77-rangepartitioner-and-the-partitioned-merge)), and disk exhaustion after the startup check ([test strategy](docs/test-strategy.md#residual-risks)).
 
 ---
 
