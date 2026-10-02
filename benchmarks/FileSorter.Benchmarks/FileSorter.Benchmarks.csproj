@@ -4,7 +4,6 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>FileSorter.Benchmarks</RootNamespace>
 
-    <!-- Keep long-running benchmarks out of dotnet test discovery. -->
     <IsTestProject>false</IsTestProject>
 
     <!-- BenchmarkDotNet requires public benchmark members and owns their cleanup. -->
@@ -16,10 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- FileSorter grants this project access to measured internal types. -->
     <ProjectReference Include="..\..\src\FileSorter\FileSorter.csproj" />
-    <!-- Benchmark input comes from the real generator, as in the test project, so the data
-         has the shipped file's shape rather than a hand-rolled vocabulary's. -->
     <ProjectReference Include="..\..\src\TestFileGenerator\TestFileGenerator.csproj" />
   </ItemGroup>
 

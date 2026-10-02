@@ -40,20 +40,20 @@ public sealed class CommandLineTests
     }
 
     [Theory]
-    [InlineData("--size is required", "out.txt")]                                  // no size
-    [InlineData("An output path is required", "--size", "1MiB")]                   // no output path
-    [InlineData("--size expects a value", "out.txt", "--size")]                    // value missing
-    [InlineData("--size expects a byte count", "out.txt", "--size", "1EiB")]       // unknown unit
-    [InlineData("--size expects a byte count", "out.txt", "--size", "-1")]         // negative
-    [InlineData("--size expects a byte count", "out.txt", "--size", "9223372036854775807KiB")] // overflows a signed 64-bit count
-    [InlineData("An output path is required", "", "--size", "1MiB")]               // empty output path
+    [InlineData("--size is required", "out.txt")]
+    [InlineData("An output path is required", "--size", "1MiB")]
+    [InlineData("--size expects a value", "out.txt", "--size")]
+    [InlineData("--size expects a byte count", "out.txt", "--size", "1EiB")]
+    [InlineData("--size expects a byte count", "out.txt", "--size", "-1")]
+    [InlineData("--size expects a byte count", "out.txt", "--size", "9223372036854775807KiB")]
+    [InlineData("An output path is required", "", "--size", "1MiB")]
     [InlineData("--duplicate-ratio expects a value between 0 and 1", "out.txt", "--size", "1MiB", "--duplicate-ratio", "1.5")]
     [InlineData("--duplicate-ratio expects a value between 0 and 1", "out.txt", "--size", "1MiB", "--duplicate-ratio", "NaN")]
     [InlineData("--duplicate-ratio expects a value between 0 and 1", "out.txt", "--size", "1MiB", "--duplicate-ratio", "Infinity")]
     [InlineData("--seed expects an integer", "out.txt", "--size", "1MiB", "--seed", "many")]
-    [InlineData("Unknown option '--max-line'", "out.txt", "--size", "1MiB", "--max-line", "1KiB")] // a knob the generator does not have
+    [InlineData("Unknown option '--max-line'", "out.txt", "--size", "1MiB", "--max-line", "1KiB")]
     [InlineData("Unknown option '--colour'", "out.txt", "--size", "1MiB", "--colour", "blue")]
-    [InlineData("Unexpected argument 'other.txt'", "out.txt", "--size", "1MiB", "other.txt")] // a second output path
+    [InlineData("Unexpected argument 'other.txt'", "out.txt", "--size", "1MiB", "other.txt")]
     public void Parsing_when_an_argument_is_unusable_explains_which_one(string expectedMessage, params string[] args)
     {
         Assert.False(CommandLine.TryParseOptions(args, out GeneratorOptions? options, out string? error));

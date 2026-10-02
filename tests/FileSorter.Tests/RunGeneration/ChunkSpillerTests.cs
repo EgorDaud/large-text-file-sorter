@@ -6,9 +6,6 @@ using Xunit;
 
 namespace FileSorter.Tests.RunGeneration;
 
-// ChunkSpiller writes through a real TemporaryRunSet and has no Stream seam to
-// substitute, so these tests touch the file system. Each creates and removes its own
-// scratch directory.
 public sealed class ChunkSpillerTests : IDisposable
 {
     private readonly TempDirectory _directory = new();
@@ -35,12 +32,6 @@ public sealed class ChunkSpillerTests : IDisposable
     [Fact]
     public async Task Spilling_preallocates_the_run_file_to_its_exact_final_length()
     {
-        // The run file is preallocated with SetLength before the first byte is written,
-        // sized to the sum of each line's length plus its terminator. expectedLength is
-        // computed independently of ChunkSpiller's own arithmetic -- straight from the
-        // source strings, not from LineDescriptor.Length. The input is "\r\n"-
-        // terminated while expectedLength allows one terminator byte per line, so the
-        // two agree only if the CR is stripped.
         string[] lines = ["3. Cherry", "1. Apple", "2. Banana"];
         long expectedLength = lines.Sum(line => Encoding.UTF8.GetByteCount(line) + 1);
         Chunk chunk = await BuildChunkAsync(Encoding.UTF8.GetBytes(string.Concat(lines.Select(line => line + "\r\n"))));
@@ -56,19 +47,10 @@ public sealed class ChunkSpillerTests : IDisposable
     [Fact]
     public async Task Spilling_writes_lines_longer_than_the_staging_buffer_directly_mid_chunk_and_at_the_end()
     {
-        // The default --max-line and SpillBufferSize are both 64 KiB, so a legal
-        // maximum-length line already exceeds the staging buffer at stock settings and
-        // has to be written straight through rather than staged. A 64-byte staging
-        // buffer stands in for that relationship at a testable size; the chunk's own
-        // buffer (4096 bytes below) holds these lines regardless. One over-length line
-        // follows two that have partly filled the staging buffer, and a second is the
-        // last line in the chunk.
         using TemporaryRunSet runs = new(_directory.Path);
         ChunkSpiller spiller = new(runs, spillBufferSize: 64);
 
-        // ChunkSorter orders by string part first, not by the leading number, so the
-        // string parts are chosen A < C < E < G to keep the spilled order the same as
-        // the written order and the two long lines in the positions described above.
+        // Sorting is by the string part, so A < C < E < G keeps sorted order equal to written order.
         string longMiddle = "2. " + new string('C', 80);
         string longLast = "4. " + new string('G', 90);
         string[] lines = ["1. AAAA", longMiddle, "3. EEEE", longLast];
@@ -99,24 +81,32 @@ public sealed class ChunkSpillerTests : IDisposable
         using TemporaryRunSet runs = new(_directory.Path);
         (Chunk chunk, BufferPool pool) = await BuildChunkWithPoolAsync("1. Apple\n"u8.ToArray());
 
-        // Run paths live inside this instance's own private directory, whose random
-        // name is not known ahead of time, so a throwaway CreateRunPath call learns it
-        // the same way ChunkSpiller's own call will. A directory sitting at the exact
-        // path the next CreateRunPath call is about to hand out then makes FileStream's
-        // own open throw, without needing a second real volume.
+        // The throwaway call takes run 1; a directory at run 2's path makes the spill's open fail.
         string privateDirectory = Path.GetDirectoryName(runs.CreateRunPath())!;
         Directory.CreateDirectory(Path.Combine(privateDirectory, "run-00000002.tmp"));
         ChunkSpiller spiller = new(runs, spillBufferSize: 4096);
 
-        // A FileStream open against a path occupied by a directory fails with
-        // UnauthorizedAccessException on Windows and with an IOException ("already
-        // exists", from FileMode.CreateNew) on Linux; the slot release is what is under
-        // test, not which of the two the platform picks.
+        // Windows throws UnauthorizedAccessException here; Linux throws IOException.
         Exception thrown = await Assert.ThrowsAnyAsync<Exception>(
             () => spiller.SpillAsync(chunk, TestContext.Current.CancellationToken));
         Assert.True(thrown is IOException or UnauthorizedAccessException, thrown.GetType().FullName);
 
         Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Fact]
+    public async Task Spilling_after_cancellation_sorts_nothing_creates_no_run_and_still_releases_the_slot()
+    {
+        using TemporaryRunSet runs = new(_directory.Path);
+        ChunkSpiller spiller = new(runs, spillBufferSize: 4096);
+        (Chunk chunk, BufferPool pool) = await BuildChunkWithPoolAsync("2. Banana\n1. Apple\n"u8.ToArray());
+        using CancellationTokenSource cts = new();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => spiller.SpillAsync(chunk, cts.Token));
+
+        Assert.Equal(0, pool.Outstanding);
+        Assert.Empty(Directory.GetFileSystemEntries(_directory.Path));   // no private directory, so no run path was ever taken
     }
 
     [Fact]
@@ -141,9 +131,7 @@ public sealed class ChunkSpillerTests : IDisposable
 
     private static async Task<(Chunk Chunk, BufferPool Pool)> BuildChunkWithPoolAsync(byte[] data)
     {
-        // Capacity 2, not 1: ChunkReader acquires the second slot and issues its fill
-        // before parsing the first, before it can know whether a second chunk will be
-        // needed, so even a single fully-exhausting chunk needs room for two slots.
+        // Capacity 2: ChunkReader acquires the next slot before parsing, even for a single chunk.
         BufferPool pool = new(bufferSize: 4096, descriptorCapacity: 16, capacity: 2);
         using MemoryStream input = new(data);
         await using ChunkReader reader = new(input, pool, maxLineLength: 1024);

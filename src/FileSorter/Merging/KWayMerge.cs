@@ -9,9 +9,9 @@ internal static class KWayMerge
     // Takes ownership of every run stream and disposes it on success or failure.
     public static async Task MergeAsync(
         IReadOnlyList<Stream> runs,
-        IReadOnlyList<RunCursorBuffers> cursorBuffers,   // One caller-supplied buffer set per run.
+        IReadOnlyList<RunCursorBuffers> cursorBuffers,
         Stream output,
-        byte[] outputStagingBuffer,   // Caller-supplied and priced by MemoryPlan.
+        byte[] outputStagingBuffer,
         int maxLineLength,
         MergeProgress? progress = null,
         CancellationToken ct = default)
@@ -29,13 +29,13 @@ internal static class KWayMerge
 
         try
         {
+            ArgumentOutOfRangeException.ThrowIfLessThan(cursorBuffers.Count, count, nameof(cursorBuffers));
+
             for (int i = 0; i < count; i++)
             {
-                // The caller maps this index to a path and slice for malformed-line errors.
                 cursors[i] = new RunCursor(runs[i], cursorBuffers[i], maxLineLength, runIndex: i);
             }
 
-            // Tree metadata is sized to the fan-in and priced once per concurrent worker.
             LoserTree tree = new(count);
             for (int i = 0; i < count; i++)
             {
@@ -62,7 +62,6 @@ internal static class KWayMerge
                     await stager.AddAfterFlushAsync(source, winner.Offset, winner.Length);
                 }
 
-                // Avoid the async state machine while the current window has descriptors.
                 if (runCursor.TryMoveNext() || await runCursor.MoveNextAsync(ct))
                 {
                     tree.SetHead(run, new RunHead(runCursor.Buffer, runCursor.Current));
@@ -75,28 +74,21 @@ internal static class KWayMerge
                 tree.Replay(run);
             }
 
-            // Flush the final buffered terminator after all lines are staged.
             await stager.FlushAsync();
         }
         catch
         {
-            // Release wrapped and unwrapped runs. Preserve the original merge failure even
-            // if cleanup also fails.
             await DisposeAllAsync(cursors, runs, count);
             throw;
         }
 
-        // On success, a disposal failure is the operation failure.
         Exception? disposalFailure = await DisposeAllAsync(cursors, runs, count);
         if (disposalFailure is not null)
         {
-            // Preserve the failing disposal's stack.
             ExceptionDispatchInfo.Capture(disposalFailure).Throw();
         }
     }
 
-    // Disposes every constructed cursor and every unwrapped stream. It continues after
-    // cleanup errors and returns the first one for the success path.
     private static async Task<Exception?> DisposeAllAsync(RunCursor?[] cursors, IReadOnlyList<Stream> runs, int count)
     {
         List<Exception>? disposalFailures = null;
@@ -122,14 +114,11 @@ internal static class KWayMerge
         return disposalFailures?[0];
     }
 
-    // Builds the stager here so the write callback's closure belongs to this method. A lambda
-    // inside MergeAsync would hoist output, progress and ct into a closure class that the
-    // per-line loop then reads through an extra indirection.
+    // Kept out of MergeAsync so the lambda's closure doesn't capture the per-line loop's locals.
     private static LineStager CreateOutputStager(
         byte[] buffer, Stream output, MergeProgress progress, CancellationToken ct) =>
         new(buffer, data => TimedWriteAsync(output, data, progress, ct));
 
-    // Measures every output write once for both byte and wait-time progress.
     private static async ValueTask TimedWriteAsync(
         Stream output, ReadOnlyMemory<byte> data, MergeProgress progress, CancellationToken ct)
     {
@@ -139,16 +128,13 @@ internal static class KWayMerge
         progress.AddBytesWritten(data.Length);
     }
 
-    // Compares live heads only. LoserTree.Wins applies the run-index tie-break.
     private static int Compare(in RunHead a, in RunHead b)
     {
-        // A dead head would compare as an empty span, so assert before comparing.
         Debug.Assert(a.IsAlive && b.IsAlive);
         return LineOrder.Compare(in a.Descriptor, a.Buffer, in b.Descriptor, b.Buffer);
     }
 
-    // Knuth loser tree: tree[0] is the winner and internal nodes hold losers. Replaying an
-    // advanced leaf visits O(log2 k) nodes rather than performing heap dequeue/enqueue.
+    // Knuth loser tree: _tree[0] is the winner and internal nodes hold losers.
     private readonly struct LoserTree
     {
         private readonly RunHead[] _heads;
@@ -160,16 +146,12 @@ internal static class KWayMerge
             _tree = new int[count];
         }
 
-        // Build waits for callers to load each asynchronous first head.
-
         public int Winner => _tree[0];
         public bool WinnerIsAlive => _heads[_tree[0]].IsAlive;
 
         public void SetHead(int run, RunHead head) => _heads[run] = head;
         public void MarkDead(int run) => _heads[run] = default;
 
-        // -1 means no leaf has reached an internal node. Dead heads still occupy leaves and
-        // lose normally, so Build has no empty-run special case.
         public void Build()
         {
             Array.Fill(_tree, -1);
@@ -179,7 +161,6 @@ internal static class KWayMerge
             }
         }
 
-        // Replays one leaf to the root during Build or after that run advances or dies.
         public void Replay(int leaf)
         {
             int candidate = leaf;
@@ -205,8 +186,6 @@ internal static class KWayMerge
             _tree[0] = candidate;
         }
 
-        // The run index breaks equal live and dead heads, giving the tournament a strict
-        // order independent of build or replay order.
         private bool Wins(int a, int b)
         {
             bool aliveA = _heads[a].IsAlive;

@@ -1,18 +1,13 @@
-using FileSorter.Infrastructure;
 using FileSorter.Planning;
+using Shared;
 
 namespace FileSorter.Cli;
 
-// Probes free space on the temp and output volumes and applies TempCapacity's decision.
-// Insufficient space throws a PreflightException with exit 2; unknown space warns and proceeds.
 internal static class VolumeCapacity
 {
-    // Windows volume roots are case-insensitive.
     private static readonly StringComparison VolumeRootComparison =
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
-    // Same-volume capacity covers runs and output together. Different volumes are
-    // checked separately because the final output can exhaust its own volume.
     internal static void Check(long inputSizeBytes, string tempDirectory, string outputDirectory)
     {
         long? tempFreeBytes = ProbeFreeSpace(tempDirectory);
@@ -45,15 +40,13 @@ internal static class VolumeCapacity
             DriveInfo drive = new(root);
             return drive.IsReady ? drive.AvailableFreeSpace : null;
         }
-        // Windows DriveInfo accepts only a drive-letter root and throws ArgumentException
-        // for a UNC share, which is Unknown like any other unreadable volume.
+        // Windows DriveInfo throws ArgumentException for a UNC root; treat it as unknown.
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
             return null;
         }
     }
 
-    // Shared resolution for DriveInfo and same-volume comparisons.
     private static string? ResolveVolumeRoot(string directory)
     {
         try
@@ -76,17 +69,16 @@ internal static class VolumeCapacity
         if (decision.Outcome == CapacityOutcome.Insufficient)
         {
             throw new PreflightException(
-                $"Insufficient space on the {volumeLabel} volume ('{directory}'): need {ProgressReporter.Describe(decision.RequiredBytes)}, " +
-                $"but only {ProgressReporter.Describe(decision.AvailableBytes)} is available.",
+                $"Insufficient space on the {volumeLabel} volume ('{directory}'): need {ByteSize.Describe(decision.RequiredBytes)}, " +
+                $"but only {ByteSize.Describe(decision.AvailableBytes)} is available.",
                 ExitCodes.InsufficientTempSpace);
         }
 
         if (decision.Outcome == CapacityOutcome.Unknown)
         {
-            // Unreported free space is unknown, not zero.
             Console.Error.WriteLine(
                 $"Could not determine free space for the {volumeLabel} volume ('{directory}'); proceeding " +
-                $"without a capacity check there (need approximately {ProgressReporter.Describe(decision.RequiredBytes)}).");
+                $"without a capacity check there (need approximately {ByteSize.Describe(decision.RequiredBytes)}).");
         }
     }
 }

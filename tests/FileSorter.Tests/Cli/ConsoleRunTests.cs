@@ -1,13 +1,11 @@
 using FileSorter.Cli;
 using FileSorter.LineFormat;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Cli;
 
-// Drives ConsoleRun.Run with bodies that throw, so the exception-to-exit-code mapping is
-// checked without delivering a real Ctrl+C or signal to the test process. In the "Program"
-// collection because Run writes to the process-wide Console.Error, which the sort tests
-// swap out to capture their own stderr.
+// Run writes to the process-wide Console.Error, which other "Program" tests swap out.
 [Collection("Program")]
 public sealed class ConsoleRunTests
 {
@@ -76,18 +74,18 @@ public sealed class ConsoleRunTests
         Assert.Throws<InvalidOperationException>(() => ConsoleRun.Run(_ => throw new InvalidOperationException("bug")));
     }
 
-    private static (int ExitCode, string Stderr) RunCaptured(Func<CancellationToken, Task<int>> body)
+    [Fact]
+    [Trait("Case", "CR-07")]
+    public void A_PreflightException_maps_to_its_own_exit_code_printing_its_message_unchanged()
     {
-        TextWriter originalError = Console.Error;
-        StringWriter capturedError = new();
-        Console.SetError(capturedError);
-        try
-        {
-            return (ConsoleRun.Run(body), capturedError.ToString());
-        }
-        finally
-        {
-            Console.SetError(originalError);
-        }
+        PreflightException failure = new("Not enough space on the temp volume.", ExitCodes.InsufficientTempSpace);
+
+        (int exitCode, string stderr) = RunCaptured(_ => throw failure);
+
+        Assert.Equal(2, exitCode);
+        Assert.Equal(failure.Message + Environment.NewLine, stderr);
     }
+
+    private static (int ExitCode, string Stderr) RunCaptured(Func<CancellationToken, Task<int>> body) =>
+        ConsoleCapture.Error(() => ConsoleRun.Run(body));
 }

@@ -9,8 +9,6 @@ using static FileSorter.Tests.Support.TestTimeouts;
 
 namespace FileSorter.Tests.EndToEnd;
 
-// The temporary-file contract of a whole sort: run files and the private directory are
-// gone after success, failure and cancellation, and nothing outside them is touched.
 [Collection("Program")]
 public sealed class SortTempCleanupTests : IDisposable
 {
@@ -18,9 +16,6 @@ public sealed class SortTempCleanupTests : IDisposable
 
     public void Dispose() => _directory.Dispose();
 
-    // Pipeline is internal, and a [Theory]'s parameters must be as accessible as
-    // the public test method itself, so the pipeline choice travels as bool here
-    // (true means Akka) and is mapped back just before use.
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -30,27 +25,21 @@ public sealed class SortTempCleanupTests : IDisposable
         string outputPath = Path.Combine(_directory.Path, "out.txt");
         string tempDirectory = Path.Combine(_directory.Path, "temp");
 
-        // A handful of lines is nowhere near ChunkSize at this budget, so ChunkReader
-        // emits exactly one chunk, phase one emits exactly one run, and phase two takes
-        // RunPlacement's single-run branch rather than MergeExecutor.
         File.WriteAllText(inputPath, "30. Cherry\n2. Apple\n100. Banana\n2. Aardvark\n");
 
         SorterOptions options = new(
             inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, useAkka ? Pipeline.Akka : Pipeline.Channels);
-        int exitCode = await Program.RunAsync(options, TestContext.Current.CancellationToken)
+        int exitCode = await SortCommand.RunAsync(options, TestContext.Current.CancellationToken)
             .WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
 
         Assert.Equal(0, exitCode);
-        AssertIsSortedPermutationOfInput(inputPath, outputPath);
+        AssertIsOracleSortOfInput(inputPath, outputPath);
         AssertNoLeftoverRunFiles(tempDirectory);
     }
 
     [Fact]
     public async Task Cancellation_unwinds_cleanly_with_no_leftover_temp_files()
     {
-        // This exercises the CancellationToken plumbing through RunAsync, not the
-        // exit-130 mapping: that mapping lives in ConsoleRun (CR-04), and no OS-level
-        // Ctrl+C can be delivered to a process from inside a unit test.
         string inputPath = Path.Combine(_directory.Path, "in.txt");
         string outputPath = Path.Combine(_directory.Path, "out.txt");
         string tempDirectory = Path.Combine(_directory.Path, "temp");
@@ -62,7 +51,7 @@ public sealed class SortTempCleanupTests : IDisposable
         cts.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => Program.RunAsync(options, cts.Token).WaitAsync(BoundedWait, TestContext.Current.CancellationToken));
+            () => SortCommand.RunAsync(options, cts.Token).WaitAsync(BoundedWait, TestContext.Current.CancellationToken));
 
         AssertNoLeftoverRunFiles(tempDirectory);
     }
@@ -71,9 +60,6 @@ public sealed class SortTempCleanupTests : IDisposable
     [Trait("Case", "ET-06")]
     public async Task An_unrelated_sentinel_named_like_a_run_file_survives_a_successful_sort()
     {
-        // Run files must never share a namespace with anything a user could plausibly
-        // have sitting next to the output, including a name matching the run-file
-        // pattern this codebase's own runs take.
         string inputPath = Path.Combine(_directory.Path, "in.txt");
         string outputPath = Path.Combine(_directory.Path, "out.txt");
         string tempDirectory = _directory.Path;
@@ -83,7 +69,7 @@ public sealed class SortTempCleanupTests : IDisposable
         File.WriteAllText(inputPath, "2. Banana\n1. Apple\n");
 
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
-        int exitCode = await Program.RunAsync(options, TestContext.Current.CancellationToken)
+        int exitCode = await SortCommand.RunAsync(options, TestContext.Current.CancellationToken)
             .WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
 
         Assert.Equal(0, exitCode);
@@ -101,7 +87,7 @@ public sealed class SortTempCleanupTests : IDisposable
         File.WriteAllText(inputPath, "2. Banana\n1. Apple\n");
 
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
-        int exitCode = await Program.RunAsync(options, TestContext.Current.CancellationToken)
+        int exitCode = await SortCommand.RunAsync(options, TestContext.Current.CancellationToken)
             .WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
 
         Assert.Equal(0, exitCode);
@@ -126,13 +112,10 @@ public sealed class SortTempCleanupTests : IDisposable
         SorterOptions firstOptions = new(firstInput, firstOutput, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
         SorterOptions secondOptions = new(secondInput, secondOutput, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
 
-        // Nothing synchronises two different TemporaryRunSet instances against each
-        // other, only the workers inside one, so two real, concurrently running
-        // invocations are what actually exercises the private-directory-per-instance
-        // guarantee -- two sequential ones would not.
-        Task<int> firstRun = Program.RunAsync(firstOptions, TestContext.Current.CancellationToken)
+        // Must overlap: nothing synchronises separate TemporaryRunSet instances, so sequential runs prove nothing.
+        Task<int> firstRun = SortCommand.RunAsync(firstOptions, TestContext.Current.CancellationToken)
             .WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
-        Task<int> secondRun = Program.RunAsync(secondOptions, TestContext.Current.CancellationToken)
+        Task<int> secondRun = SortCommand.RunAsync(secondOptions, TestContext.Current.CancellationToken)
             .WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
 
         int[] exitCodes = await Task.WhenAll(firstRun, secondRun);
@@ -141,8 +124,6 @@ public sealed class SortTempCleanupTests : IDisposable
         Assert.Equal("1. Apple\n2. Banana\n", File.ReadAllText(firstOutput));
         Assert.Equal("30. Cherry\n4. Date\n", File.ReadAllText(secondOutput));
 
-        // Both invocations shared tempDirectory, so this proves neither leaked a
-        // private directory nor a run file into the other's namespace.
         AssertNoLeftoverRunFiles(tempDirectory);
     }
 
@@ -150,16 +131,11 @@ public sealed class SortTempCleanupTests : IDisposable
     [Trait("Case", "ET-09")]
     public async Task Sorting_forces_a_multi_pass_merge_and_leaves_no_private_directory_behind_on_success()
     {
-        // The plan at the minimum viable budget pins MergeFanIn at MinMergeFanIn (2)
-        // -- the bare minimum a viable budget can give -- so any run count above two
-        // forces several merge passes rather than one, the same technique ET-04's own
-        // multi-pass shape uses. The input needs to be large enough, at this budget's
-        // tiny chunk size, to produce more than two runs.
         const int parallelism = 2;
         const int maxLineLength = 256;
-        long budget = MemoryBudget.MinimumViableBudget(parallelism, maxLineLength, assumedMeanLineLength: 32);
-        MemoryPlan plan = MemoryBudget.Calculate(budget, parallelism, maxLineLength, assumedMeanLineLength: 32);
-        Assert.Equal(2, plan.MergeFanIn); // MinMergeFanIn -- the whole point of using the bare minimum
+        long budget = MemoryBudget.MinimumViableBudget(parallelism, maxLineLength, MemoryBudget.AssumedMeanLineLength);
+        MemoryPlan plan = MemoryBudget.Calculate(budget, parallelism, maxLineLength, MemoryBudget.AssumedMeanLineLength);
+        Assert.Equal(2, plan.MergeFanIn);
 
         string inputPath = Path.Combine(_directory.Path, "in.txt");
         string outputPath = Path.Combine(_directory.Path, "out.txt");
@@ -174,8 +150,6 @@ public sealed class SortTempCleanupTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.True(runCount > 2, "the fixture must produce more runs than the fan-in, or a fan-in of 2 cannot force more than one pass");
         Assert.True(passes > 1, "this shape must force MergePlanner to run more than one pass, or it is no different from a single-pass merge");
-        // The sorter leaves the parent alone and removes only its own private
-        // subdirectory, so --temp survives success -- empty.
         Assert.True(Directory.Exists(tempDirectory));
         AssertNoLeftoverRunFiles(tempDirectory);
     }
@@ -184,11 +158,6 @@ public sealed class SortTempCleanupTests : IDisposable
     [Trait("Case", "ET-10")]
     public async Task A_forced_failure_during_phase_one_still_removes_the_private_directory()
     {
-        // MalformedLineException surfaces after some runs may already have been
-        // spilled, so this is the case where the private directory genuinely held
-        // files at the moment of failure, not merely an empty directory nobody wrote
-        // into. TemporaryRunSet's cleanup runs from RunAsync's `using` declaration
-        // regardless of how phase one exits.
         string inputPath = Path.Combine(_directory.Path, "in.txt");
         string outputPath = Path.Combine(_directory.Path, "out.txt");
         string tempDirectory = Path.Combine(_directory.Path, "temp");
@@ -197,33 +166,50 @@ public sealed class SortTempCleanupTests : IDisposable
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
 
         await Assert.ThrowsAsync<MalformedLineException>(
-            () => Program.RunAsync(options, TestContext.Current.CancellationToken)
+            () => SortCommand.RunAsync(options, TestContext.Current.CancellationToken)
                 .WaitAsync(BoundedWait, TestContext.Current.CancellationToken));
 
-        // The sorter leaves the parent alone and removes only its own private
-        // subdirectory, so --temp survives the failure -- empty.
         Assert.True(Directory.Exists(tempDirectory));
         AssertNoLeftoverRunFiles(tempDirectory);
         Assert.False(File.Exists(outputPath));
     }
 
-    // The same Console.Error swap SortCapturedAsync uses, without that helper's own
-    // assumption that the run succeeds: a caller here wants the exit code and the
-    // stderr text for a run that may fail by design.
-    private static async Task<(int ExitCode, string Stderr)> RunCapturedAsync(SorterOptions options)
+    [Fact]
+    [Trait("Case", "ET-20")]
+    public async Task Cancelling_once_phase_one_has_finished_keeps_an_existing_output_and_leaves_no_run_behind()
     {
-        TextWriter originalError = Console.Error;
-        StringWriter capturedError = new();
-        Console.SetError(capturedError);
-        try
+        // Cancelling on the phase-one summary line lands after every spill and before the merge opens the output.
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
+        WriteGeneratedInput(inputPath, targetBytes: 1024 * 1024, seed: 7);
+        byte[] preExisting = "a complete, correct output from an earlier run\n"u8.ToArray();
+        File.WriteAllBytes(outputPath, preExisting);
+
+        SorterOptions options = new(inputPath, outputPath, tempDirectory, 1_051_664, 256, Parallelism: 2, Pipeline.Channels);
+        using CancellationTokenSource cts = new();
+        using CancelOnLineWriter cancelOnPhaseOne = new("phase one produced", cts);
+
+        (_, string stderr) = await ConsoleCapture.ErrorAsync(
+            () => Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => Task.Run(() => SortCommand.RunAsync(options, cts.Token), TestContext.Current.CancellationToken)
+                    .WaitAsync(BoundedWait, TestContext.Current.CancellationToken)),
+            cancelOnPhaseOne);
+
+        Assert.True(ParseRunCount(stderr) > 1, "the input must spill several runs, or there is no merge to cancel");
+        Assert.Equal(preExisting, File.ReadAllBytes(outputPath));
+        AssertNoLeftoverRunFiles(tempDirectory);
+    }
+
+    private sealed class CancelOnLineWriter(string marker, CancellationTokenSource cts) : StringWriter
+    {
+        public override void WriteLine(string? value)
         {
-            int exitCode = await Program.RunAsync(options, TestContext.Current.CancellationToken)
-                .WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
-            return (exitCode, capturedError.ToString());
-        }
-        finally
-        {
-            Console.SetError(originalError);
+            base.WriteLine(value);
+            if (value?.Contains(marker, StringComparison.Ordinal) == true)
+            {
+                cts.Cancel();
+            }
         }
     }
 }

@@ -31,11 +31,11 @@ public sealed class BufferPoolTests
         Task<PooledBuffer> pending = pool.AcquireAsync(TestContext.Current.CancellationToken).AsTask();
         Task completedFirst = await Task.WhenAny(pending, Task.Delay(BoundedWait, TestContext.Current.CancellationToken));
 
-        Assert.NotSame(pending, completedFirst); // the wait, not the acquisition, won the race
+        Assert.NotSame(pending, completedFirst);
         Assert.False(pending.IsCompleted);
 
         held.Dispose();
-        (await pending).Dispose(); // drains the pending acquisition so nothing leaks past the test
+        (await pending).Dispose();
     }
 
     [Fact]
@@ -146,10 +146,10 @@ public sealed class BufferPoolTests
 
         PooledBuffer buffer = await pool.AcquireAsync(TestContext.Current.CancellationToken);
         buffer.Dispose();
-        Assert.Throws<InvalidOperationException>(buffer.Dispose); // second release of the same buffer
+        Assert.Throws<InvalidOperationException>(buffer.Dispose);
 
         PooledBuffer neverIssued = new(pool, slot: 0, bytes: new byte[1], lines: []);
-        Assert.Throws<InvalidOperationException>(neverIssued.Dispose); // slot 0 is not outstanding
+        Assert.Throws<InvalidOperationException>(neverIssued.Dispose);
     }
 
     [Fact]
@@ -197,9 +197,6 @@ public sealed class BufferPoolTests
         second.Bytes[0] = (byte)'A';
         int recordedLength = 1;
 
-        // The buffer is not cleared: everything beyond the recorded length is still
-        // the first consumer's data. That is the deliberate trade — harmless, because
-        // the only thing a correct consumer ever reads is the recorded length itself.
         Assert.Equal((byte)'A', second.Bytes[0]);
         Assert.Equal((byte)'X', second.Bytes[recordedLength]);
         second.Dispose();

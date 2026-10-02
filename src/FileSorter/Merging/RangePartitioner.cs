@@ -1,31 +1,21 @@
+using System.Numerics;
 using System.Runtime.ExceptionServices;
 using FileSorter.LineFormat;
 using Microsoft.Win32.SafeHandles;
 
 namespace FileSorter.Merging;
 
-// Splits one merge into disjoint key ranges, recorded as byte offsets for each run. It
-// samples byte-position quantiles for splitter keys, then binary-searches each sorted run
-// for the first line whose full LineOrder key is at least that splitter. Equal lines remain
-// together because the boundary is before the first equal line.
-//
-// This runs before merge buffers are allocated. Its bound is SampleLineByteBudget, one
-// max(FirstProbeBytes, maxLineLength + 2) probe per concurrent task, and
-// runCount x (workerCount + 1) offsets.
+// Each boundary is the first line at or above its splitter, so equal lines never straddle two workers.
 internal static class RangePartitioner
 {
     private const byte Newline = (byte)'\n';
 
-    // Initial probe size; the fill loop handles lines that exceed it.
     private const int FirstProbeBytes = 8 * 1024;
 
-    // Fixed sample count keeps splitter quality independent of the configured line limit.
-    // SampleLineByteBudget limits retained bytes.
-    private const int TargetSampleLines = 4096;
-    private const int SampleLineByteBudget = 16 * 1024 * 1024;
+    // Must be a power of two for AdmitWithinBudget's bit-reversed order.
+    internal const int TargetSampleLines = 4096;
+    internal const int SampleLineByteBudget = 16 * 1024 * 1024;
 
-    // Returns null when no partition can be sampled. parallelism also bounds probe-buffer
-    // allocation while these synchronous I/O loops run.
     public static RangePartition? Locate(
         IReadOnlyList<string> runPaths, int workerCount, int maxLineLength, int parallelism, CancellationToken ct)
     {
@@ -46,7 +36,7 @@ internal static class RangePartitioner
             return null;
         }
 
-        int probeSize = Math.Max(FirstProbeBytes, maxLineLength + 2);
+        int probeSize = Math.Max(FirstProbeBytes, maxLineLength + LineCursor.WindowSlack);
         SampleLine[] splitters = ChooseSplitters(
             runPaths, lengths, runStarts, totalBytes, workerCount, maxLineLength, probeSize, parallelism, ct);
         if (splitters.Length == 0)
@@ -64,7 +54,6 @@ internal static class RangePartitioner
             long[] runOffsets = new long[workerCount + 1];
             runOffsets[workerCount] = length;
 
-            // Sorted splitters make offsets monotone and shrink each later search interval.
             long lower = 0;
             for (int s = 0; s < splitters.Length; s++)
             {
@@ -79,7 +68,6 @@ internal static class RangePartitioner
         return RangePartition.From(offsets, lengths, workerCount, totalBytes);
     }
 
-    // Splitter keys retain their descriptors. Repeated keys produce empty slices safely.
     private static SampleLine[] ChooseSplitters(
         IReadOnlyList<string> runPaths, long[] lengths, long[] runStarts, long totalBytes,
         int workerCount, int maxLineLength, int probeSize, int parallelism, CancellationToken ct)
@@ -88,9 +76,11 @@ internal static class RangePartitioner
         long retainedBytes = 0;
 
         SampleLine?[] drawn = new SampleLine?[sampleCount];
+        int[] drawRuns = new int[sampleCount];
+        long[] drawStarts = new long[sampleCount];
+        int[] drawLengths = new int[sampleCount];
         RunInParallel(sampleCount, probeSize, parallelism, (i, probe) =>
         {
-            // Sample the midpoint of each equal byte segment in the concatenated runs.
             long globalPosition = ((2 * (long)i + 1) * totalBytes) / (2L * sampleCount);
             int run = FindRun(runStarts, globalPosition);
             long position = globalPosition - runStarts[run];
@@ -101,25 +91,49 @@ internal static class RangePartitioner
             long lineStart = AlignAtOrAfter(handle, lengths[run], position, probe, runPaths[run]);
             if (lineStart >= lengths[run])
             {
-                // The position lies in the last line, with no later line start to sample.
                 return;
             }
 
             int length = ReadLineAt(handle, lineStart, probe, maxLineLength, runPaths[run]);
+            drawRuns[i] = run;
+            drawStarts[i] = lineStart;
+            drawLengths[i] = length;
 
-            // Read and parse every draw, but retain only lines within the byte budget.
-            // Interlocked.Add tests the post-add total before copying bytes, making the
-            // retained-byte bound exact.
-            if (Interlocked.Add(ref retainedBytes, length) > SampleLineByteBudget)
+            // Parse every draw, not just retained ones, so a malformed line always surfaces.
+            LineDescriptor descriptor = Describe(probe, 0, length, lineStart, runPaths[run]);
+
+            if (Interlocked.Add(ref retainedBytes, length) <= SampleLineByteBudget)
             {
-                return;
+                drawn[i] = new SampleLine(probe.AsSpan(0, length).ToArray(), descriptor);
+            }
+        }, ct);
+
+        // Over budget, which draws were kept depended on scheduling; re-admit by length so the partition is deterministic.
+        if (retainedBytes > SampleLineByteBudget)
+        {
+            bool[] admitted = AdmitWithinBudget(drawLengths);
+            for (int i = 0; i < sampleCount; i++)
+            {
+                if (!admitted[i])
+                {
+                    drawn[i] = null;
+                }
             }
 
-            byte[] bytes = probe.AsSpan(0, length).ToArray();
+            RunInParallel(sampleCount, probeSize, parallelism, (i, probe) =>
+            {
+                if (!admitted[i] || drawn[i] is not null)
+                {
+                    return;
+                }
 
-            // Build here so malformed-line diagnostics retain their path and byte offset.
-            drawn[i] = new SampleLine(bytes, Describe(bytes, 0, bytes.Length, lineStart, runPaths[run]));
-        }, ct);
+                string path = runPaths[drawRuns[i]];
+                using SafeFileHandle handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.Read, FileOptions.None);
+                int length = ReadLineAt(handle, drawStarts[i], probe, maxLineLength, path);
+                byte[] bytes = probe.AsSpan(0, length).ToArray();
+                drawn[i] = new SampleLine(bytes, Describe(bytes, 0, length, drawStarts[i], path));
+            }, ct);
+        }
 
         List<SampleLine> sample = new(sampleCount);
         foreach (SampleLine? line in drawn)
@@ -146,8 +160,38 @@ internal static class RangePartitioner
         return splitters;
     }
 
-    // Finds the first line in [lower, length) with a key at least splitter, or length.
-    // AtOrAbove is monotone over byte positions because the run is sorted.
+    // Bit-reversed order spreads any budget-truncated prefix evenly across all runs, not just the first.
+    private static bool[] AdmitWithinBudget(int[] drawLengths)
+    {
+        int bits = BitOperations.Log2((uint)drawLengths.Length);
+        bool[] admitted = new bool[drawLengths.Length];
+        long total = 0;
+        for (int j = 0; j < drawLengths.Length; j++)
+        {
+            int i = ReverseBits(j, bits);
+            int length = drawLengths[i];
+            if (length > 0 && total + length <= SampleLineByteBudget)
+            {
+                admitted[i] = true;
+                total += length;
+            }
+        }
+
+        return admitted;
+    }
+
+    private static int ReverseBits(int value, int bits)
+    {
+        int reversed = 0;
+        for (int b = 0; b < bits; b++)
+        {
+            reversed = (reversed << 1) | (value & 1);
+            value >>= 1;
+        }
+
+        return reversed;
+    }
+
     private static long LocateFirstAtOrAbove(
         SafeFileHandle handle, long length, long lower, in SampleLine splitter,
         byte[] probe, int maxLineLength, string runPath)
@@ -167,7 +211,6 @@ internal static class RangePartitioner
             }
         }
 
-        // Align the lower-bound position so every partition offset starts a line.
         return AlignAtOrAfter(handle, length, low, probe, runPath);
     }
 
@@ -178,18 +221,15 @@ internal static class RangePartitioner
         long lineStart = AlignAtOrAfter(handle, length, position, probe, runPath);
         if (lineStart >= length)
         {
-            // No later line means this splitter's boundary is the run length.
             return true;
         }
 
         int lineLength = ReadLineAt(handle, lineStart, probe, maxLineLength, runPath);
         LineDescriptor descriptor = Describe(probe, 0, lineLength, lineStart, runPath);
 
-        // Use the merge's full ordering so partition boundaries match emitted order.
         return LineOrder.Compare(in descriptor, probe, in splitter.Descriptor, splitter.Bytes) >= 0;
     }
 
-    // Finds the first line start at or after position, or length inside the final line.
     private static long AlignAtOrAfter(
         SafeFileHandle handle, long length, long position, byte[] probe, string runPath)
     {
@@ -215,12 +255,10 @@ internal static class RangePartitioner
             return length;
         }
 
-        // A valid line must terminate within this maxLineLength + 2 probe.
         throw Malformed(scan, probe, filled, runPath);
     }
 
-    // Reads content into probe without stripping CR. Runs use LF terminators, so a preceding
-    // CR is content and must match RunCursor's key.
+    // Don't strip CR: runs are LF-terminated, so a CR is content and must match RunCursor's key.
     private static int ReadLineAt(
         SafeFileHandle handle, long lineStart, byte[] probe, int maxLineLength, string runPath)
     {
@@ -235,8 +273,6 @@ internal static class RangePartitioner
         return contentLength;
     }
 
-    // Reads forward from `from` into probe until a line feed appears, the probe is full, or
-    // the file ends. Returns that line feed's index in probe, or -1.
     private static int FillToNewline(SafeFileHandle handle, long from, byte[] probe, out int filled)
     {
         filled = 0;
@@ -263,7 +299,6 @@ internal static class RangePartitioner
         return -1;
     }
 
-    // Local parsing retains this method's run-path diagnostics.
     private static LineDescriptor Describe(byte[] buffer, int offset, int length, long byteOffset, string runPath)
     {
         if (!LineDescriptor.TryCreate(buffer, offset, length, out LineDescriptor descriptor))
@@ -278,8 +313,6 @@ internal static class RangePartitioner
     private static MalformedLineException Malformed(long byteOffset, byte[] probe, int filled, string runPath) =>
         new(byteOffset, MalformedLineException.LineNumberUnavailable, MalformedLineException.PreviewOf(probe.AsSpan(0, filled)), runPath);
 
-    // The run whose byte range contains position, by binary search over the prefix sums
-    // rather than a scan, since the run count reaches into the thousands.
     private static int FindRun(long[] runStarts, long position)
     {
         int low = 0;
@@ -300,8 +333,6 @@ internal static class RangePartitioner
         return low;
     }
 
-    // One probe buffer per worker preserves the allocation bound. Unwrap exceptions so
-    // malformed-line handling receives its original type.
     private static void RunInParallel(
         int count, int probeSize, int maxDegreeOfParallelism, Action<int, byte[]> body, CancellationToken ct)
     {
@@ -325,7 +356,6 @@ internal static class RangePartitioner
         }
     }
 
-    // A sampled line with a descriptor over its own array at offset 0.
     private readonly struct SampleLine(byte[] bytes, LineDescriptor descriptor)
     {
         public readonly byte[] Bytes = bytes;

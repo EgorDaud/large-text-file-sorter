@@ -1,7 +1,5 @@
 namespace FileSorter.Benchmarks;
 
-// A unique scratch directory under the system temp folder for one benchmark run.
-// Removal is best effort: a file a scanner still holds open must not fail the run.
 internal static class ScratchDirectory
 {
     public static string Create(string name)
@@ -22,7 +20,7 @@ internal static class ScratchDirectory
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            // Best effort; see the type comment.
+            // Best effort: a file a scanner still holds open must not fail the run.
         }
     }
 }

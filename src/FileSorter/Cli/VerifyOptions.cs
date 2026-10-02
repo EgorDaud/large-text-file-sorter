@@ -1,17 +1,14 @@
 using System.Diagnostics.CodeAnalysis;
-using FileSorter.Cli;
+using FileSorter.Verification;
+using Shared;
 
-namespace FileSorter.Verification;
+namespace FileSorter.Cli;
 
-// Verification uses fixed scan buffers; maxLineLength bounds carry between reads.
 internal sealed record VerifyOptions(string InputPath, string OutputPath, int MaxLineLength)
 {
-    // Verify allocates OutputVerifier.BaseBufferSize + maxLineLength per file, so its ceiling
-    // must remain below Array.MaxLength.
     internal static readonly long MaxLineLengthCeiling = Array.MaxLength - OutputVerifier.BaseBufferSize;
 
-    // Verify mode shares only --max-line with sorting, so it has its own parser. args[0] is
-    // "--verify". Program prints usage when parsing fails.
+    // args[0] is "--verify".
     internal static bool TryParse(
         string[] args,
         [NotNullWhen(true)] out VerifyOptions? options,
@@ -30,12 +27,11 @@ internal sealed record VerifyOptions(string InputPath, string OutputPath, int Ma
             switch (argument)
             {
                 case "--max-line":
-                    if (!CommandLine.TryTakeValue(args, ref i, argument, out string? maxLine, out error))
+                    if (!Arguments.TryTakeValue(args, ref i, argument, out string? maxLine, out error))
                     {
                         return false;
                     }
 
-                    // Verify mode's fixed per-file buffer has a lower ceiling.
                     if (!CommandLine.TryParseMaxLine(maxLine, MaxLineLengthCeiling, out maxLineLength, out error))
                     {
                         return false;

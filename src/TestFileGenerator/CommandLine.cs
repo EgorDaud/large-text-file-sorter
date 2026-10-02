@@ -1,14 +1,12 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using Shared;
 using TestFileGenerator.Generation;
 
 namespace TestFileGenerator;
 
-// The generator's arguments: the usage text and the parser Program and its tests share.
 internal static class CommandLine
 {
-    private const double DefaultDuplicateRatio = 0.1;
-
     internal const string Usage = """
         Usage:
           generator <output> --size 100GiB [--seed 42] [--duplicate-ratio 0.1]
@@ -22,15 +20,6 @@ internal static class CommandLine
         is never larger than asked for and never ends in a partial line.
         """;
 
-    // Match longer suffixes before B.
-    private static readonly (string Suffix, long Multiplier)[] SizeUnits =
-    [
-        ("KiB", 1L << 10),
-        ("MiB", 1L << 20),
-        ("GiB", 1L << 30),
-        ("B", 1L),
-    ];
-
     internal static bool TryParseOptions(
         string[] args,
         [NotNullWhen(true)] out GeneratorOptions? options,
@@ -42,7 +31,7 @@ internal static class CommandLine
         string? outputPath = null;
         long? targetBytes = null;
         int seed = 0;
-        double duplicateRatio = DefaultDuplicateRatio;
+        double duplicateRatio = GeneratorOptions.DefaultDuplicateRatio;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -50,12 +39,12 @@ internal static class CommandLine
             switch (argument)
             {
                 case "--size":
-                    if (!TryTakeValue(args, ref i, argument, out string? size, out error))
+                    if (!Arguments.TryTakeValue(args, ref i, argument, out string? size, out error))
                     {
                         return false;
                     }
 
-                    if (!TryParseSize(size, out long parsedSize))
+                    if (!ByteSize.TryParse(size, out long parsedSize))
                     {
                         error = $"--size expects a byte count, optionally suffixed B, KiB, MiB or GiB, but got '{size}'.";
                         return false;
@@ -65,7 +54,7 @@ internal static class CommandLine
                     break;
 
                 case "--seed":
-                    if (!TryTakeValue(args, ref i, argument, out string? seedText, out error))
+                    if (!Arguments.TryTakeValue(args, ref i, argument, out string? seedText, out error))
                     {
                         return false;
                     }
@@ -79,7 +68,7 @@ internal static class CommandLine
                     break;
 
                 case "--duplicate-ratio":
-                    if (!TryTakeValue(args, ref i, argument, out string? ratioText, out error))
+                    if (!Arguments.TryTakeValue(args, ref i, argument, out string? ratioText, out error))
                     {
                         return false;
                     }
@@ -125,51 +114,6 @@ internal static class CommandLine
         }
 
         options = new GeneratorOptions(outputPath, targetBytes.Value, seed, duplicateRatio);
-        return true;
-    }
-
-    private static bool TryTakeValue(
-        string[] args,
-        ref int index,
-        string option,
-        [NotNullWhen(true)] out string? value,
-        [NotNullWhen(false)] out string? error)
-    {
-        if (index + 1 >= args.Length)
-        {
-            value = null;
-            error = $"{option} expects a value.";
-            return false;
-        }
-
-        value = args[++index];
-        error = null;
-        return true;
-    }
-
-    private static bool TryParseSize(string text, out long bytes)
-    {
-        bytes = 0;
-        long multiplier = 1;
-        ReadOnlySpan<char> digits = text;
-
-        foreach ((string suffix, long unit) in SizeUnits)
-        {
-            if (text.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
-            {
-                multiplier = unit;
-                digits = text.AsSpan(0, text.Length - suffix.Length);
-                break;
-            }
-        }
-
-        if (!long.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out long value)
-            || value > long.MaxValue / multiplier)
-        {
-            return false;
-        }
-
-        bytes = value * multiplier;
         return true;
     }
 }

@@ -167,9 +167,6 @@ public sealed class LineParserTests
         Assert.Equal(line[3..], line[stringStart..].ToArray());
     }
 
-    // LP-23 and LP-24 belong to no case and are not reused (see test-strategy.md).
-
-    // long.TryParse ignores trailing NUL characters, so the parser must check the grammar itself.
     [Theory]
     [Trait("Case", "LP-26")]
     [InlineData("12\0. x")]
@@ -201,10 +198,6 @@ public sealed class LineParserTests
     {
         AssertParses(System.Text.Encoding.Latin1.GetBytes(line), expected, "x");
     }
-
-    // There is no test here for the operator-facing diagnostic: TryParse returns false
-    // and carries no position, because the caller is what knows the byte offset and the
-    // line number. ChunkReader owns that diagnostic and is tested for it.
 
     private static void AssertParses(ReadOnlySpan<byte> line, long expectedNumber, string expectedStringPart)
     {

@@ -1,10 +1,5 @@
 namespace FileSorter.Tests.Support;
 
-/// <summary>
-/// A unique, already-created scratch directory that removes itself on disposal. Cleanup
-/// failures are swallowed: a scratch directory a scanner or the OS still holds open must
-/// not turn a passing test red.
-/// </summary>
 internal sealed class TempDirectory : IDisposable
 {
     public TempDirectory()
@@ -23,7 +18,7 @@ internal sealed class TempDirectory : IDisposable
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            // Best effort; see the type comment.
+            // Best effort: a scanner or the OS may still hold the directory open.
         }
     }
 }

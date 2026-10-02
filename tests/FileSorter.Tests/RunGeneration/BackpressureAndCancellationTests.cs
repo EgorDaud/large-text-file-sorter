@@ -7,29 +7,12 @@ using static FileSorter.Tests.Support.TestTimeouts;
 
 namespace FileSorter.Tests.RunGeneration;
 
-/// <summary>
-/// The three claims <see cref="RunGenerationStrategyTests"/> cannot make: that the pool is
-/// load-bearing -- a spiller held open genuinely stalls the reader, rather than the
-/// ceiling merely never being observed to be exceeded -- that cancellation is prompt
-/// rather than eventual, and that a run is over when the strategy says it is, with no
-/// spill of its own still running against resources its caller is about to dispose. Both
-/// strategies run the same cases, because a behaviour holding for one scheduler and not
-/// the other is a defect, not a library quirk.
-/// </summary>
 public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture>
 {
-    // An upper bound on how long a prompt cancellation may take on a saturated thread
-    // pool, not an expectation of how long one normally takes. It stays under
-    // BoundedWait so a cancellation that never unwinds fails this assertion rather than
-    // being hidden behind the outer timeout.
+    // Stays under BoundedWait so a cancellation that never unwinds fails here, not at the outer timeout.
     private static readonly TimeSpan CancellationResponsivenessBound = TimeSpan.FromSeconds(10);
 
-    // How long a strategy that walks away from a spill it started is given to do so
-    // before the join cases below check that it has not. This is not a timing assumption
-    // on the passing side: a strategy that joins its spills cannot complete while the
-    // gate is held, however long or short this wait is. It only decides how reliably a
-    // strategy that does not join is caught here rather than by the run-registry
-    // assertion that follows it.
+    // Not a pass-side timing assumption: a joining strategy cannot finish while the gate is held.
     private static readonly TimeSpan UnjoinedReturnWindow = TimeSpan.FromMilliseconds(250);
 
     private readonly AkkaFixture _akka;
@@ -52,9 +35,6 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
         BufferPool pool = new(bufferSize: 128, descriptorCapacity: 2, capacity: poolCapacity);
         await using ChunkReader reader = new(input, pool, maxLineLength: 32);
 
-        // The one spiller this case holds open. Every chunk after the first has
-        // nowhere to go once the pool fills, since parallelism 1 means nothing else
-        // is draining it.
         TaskCompletionSource heldOpen = new(TaskCreationOptions.RunContinuationsAsynchronously);
         int firstSpillClaimed = 0;
         ChunkSpill spill = async (chunk, ct) =>
@@ -82,18 +62,11 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
             stalledAt < totalLines,
             "the reader finished the whole stream before the pool ever filled, so this proves nothing about a stall");
 
-        // How far a strategy lets the reader run ahead of the one chunk inside spill is
-        // its own internal buffering: Channels fills the pool to its ceiling, while
-        // Akka's SelectAsyncUnordered at parallelism 1 requests no further input until
-        // its one in-flight operation completes and so stalls holding only the blocked
-        // chunk's buffer. Either way at least one buffer is held, and the stall itself
-        // is what stalledAt < totalLines above proves.
+        // Channels fills the pool; Akka at parallelism 1 stalls holding only the blocked chunk.
         Assert.InRange(pool.Outstanding, 1, poolCapacity);
 
         heldOpen.SetResult();
 
-        // Progress resumes: LinesRead moves past where it stalled, and the run goes on
-        // to complete normally rather than the held-open spill having wedged it for good.
         await WaitForLinesReadBeyondAsync(reader, stalledAt, BoundedWait);
         IReadOnlyList<string> paths = await runTask.WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
 
@@ -110,17 +83,11 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
         const int parallelism = 2;
         const int totalLines = 1000;
 
-        // At two lines per chunk (descriptorCapacity below) and a 50 ms spill delay
-        // split across two workers, draining every chunk this input produces would take
-        // roughly (1000 / 2) * 50 / 2 ms ~ 12.5 seconds if cancellation did nothing.
-        // Cancelling shortly after the start and requiring the unwind to finish inside
-        // CancellationResponsivenessBound is what makes "responsive" falsifiable.
+        // Uncancelled drain: (1000 / 2) chunks * 50 ms / 2 workers ~ 12.5 s.
         using MemoryStream input = new(BuildLines(totalLines));
         BufferPool pool = new(bufferSize: 128, descriptorCapacity: 2, capacity: parallelism + 2);
         await using ChunkReader reader = new(input, pool, maxLineLength: 32);
 
-        // Signalled from inside the first spill, so the cancel below provably lands while
-        // the run is underway rather than after a guessed delay.
         TaskCompletionSource firstSpillStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         ChunkSpill spill = async (chunk, ct) =>
@@ -179,15 +146,11 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
                 {
                     siblingSpilling.SetResult();
 
-                    // Waits on the gate rather than on ct: this stands in for a spill
-                    // already inside a write it cannot abandon, which is the sibling a
-                    // strategy has to join rather than walk away from.
+                    // Not ct: a spill that abandons on cancellation would join trivially.
                     await release.Task;
                     return registry.CreateRunPath();
                 }
 
-                // Held until the sibling is genuinely in flight, so the case cannot pass
-                // by there having been no sibling to join in the first place.
                 await siblingSpilling.Task.WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
                 failureRaised.TrySetResult();
                 throw new IOException("simulated spill failure");
@@ -214,9 +177,6 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
     public async Task A_malformed_line_does_not_end_the_run_while_a_spill_is_still_running(
         RunGenerationStrategyTests.Strategy strategy)
     {
-        // The failure comes from the reader rather than from a spill, which is the other
-        // half of the same claim: the chunk before the malformed one is already out with
-        // a spiller, and that spiller has to be joined too.
         const int parallelism = 2;
         const int linesPerChunk = 2;
         using MemoryStream input = new("1. Apple\n2. Banana\nnotaline\n"u8.ToArray());
@@ -243,18 +203,8 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
     public async Task Cancellation_does_not_end_the_run_while_a_spill_is_still_running(
         RunGenerationStrategyTests.Strategy strategy)
     {
-        // Cancellation is the path where walking away is most tempting and least
-        // acceptable: Program's own cancellation handler disposes the temporary-run set
-        // immediately afterwards, so a spill still running then is a run file created
-        // after the cleanup that was supposed to remove it.
-        //
-        // Only the first spill is gated, as in SL-03, and every later one finishes at
-        // once. Gating all of them instead saturates the pipeline at parallelism 2:
-        // nothing asks the reader for another chunk, so nothing observes the token, and
-        // the strategy stays unfinished for want of a failure rather than because it
-        // joined anything -- which would make the case pass against a strategy that
-        // joins nothing at all. With one slot always free the reader keeps being pulled,
-        // and the parking stream keeps a read outstanding for the token to fault.
+        // Only the first spill is gated: gating all would stall the reader so the token is never
+        // observed, and a strategy that joins nothing would pass too.
         const int parallelism = 2;
         using ParkingStream input = new(BuildLines(count: 20));
         BufferPool pool = new(bufferSize: 128, descriptorCapacity: 2, capacity: parallelism + 2);
@@ -273,10 +223,7 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
                 {
                     spilling.SetResult();
 
-                    // Waits on the gate rather than on ct, for SL-03's reason: a spill
-                    // that abandons its work the instant cancellation is requested joins
-                    // trivially, and would prove nothing about a strategy that does not
-                    // wait.
+                    // Not ct: a spill that abandons on cancellation would join trivially.
                     await release.Task;
                 }
 
@@ -299,10 +246,6 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
         Assert.IsAssignableFrom<OperationCanceledException>(failure);
     }
 
-    // The half the three cases above share: the strategy must still be running while the
-    // gate is held, and once it has returned, nothing it started may touch the caller's
-    // resources -- modelled by closing the run registry the instant the strategy's task
-    // completes, exactly as Program disposes TemporaryRunSet on the way out.
     private static async Task<Exception> ReleaseAndCaptureAsync(
         Task<IReadOnlyList<string>> runTask, TaskCompletionSource release, RunRegistry registry)
     {
@@ -322,10 +265,7 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
         return failure;
     }
 
-    // A spill that finishes only when the gate is released, and reaches the registry only
-    // once it does. It waits on the gate rather than on its own token deliberately: a
-    // spill that abandons its work the moment cancellation is requested would join
-    // trivially, and would prove nothing about a strategy that does not wait.
+    // Waits on the gate, not ct: a spill that abandons on cancellation would join trivially.
     private static ChunkSpill HeldSpill(TaskCompletionSource spilling, TaskCompletionSource release, RunRegistry registry) =>
         async (chunk, ct) =>
         {
@@ -343,8 +283,7 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
 
     private RunGenerationStrategy Resolve(RunGenerationStrategyTests.Strategy strategy) => strategy switch
     {
-        RunGenerationStrategyTests.Strategy.Akka => (reader, spill, parallelism, ct) =>
-            AkkaRunGeneration.RunAsync(reader, spill, parallelism, _akka.Materializer, ct),
+        RunGenerationStrategyTests.Strategy.Akka => AkkaRunGeneration.Strategy(_akka.Materializer),
         RunGenerationStrategyTests.Strategy.Channels => ChannelRunGeneration.RunAsync,
         _ => throw new ArgumentOutOfRangeException(nameof(strategy)),
     };
@@ -352,9 +291,6 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
     private static byte[] BuildLines(int count) =>
         Encoding.UTF8.GetBytes(string.Concat(Enumerable.Range(0, count).Select(i => $"{i}. Line number {i}\n")));
 
-    // Polls LinesRead until it has not moved for twenty consecutive samples, then
-    // returns that value: how long a strategy takes to stall is strategy-dependent, so
-    // a fixed delay would be a guess.
     private static async Task<long> WaitForStableLinesReadAsync(ChunkReader reader, TimeSpan timeout)
     {
         DateTime deadline = DateTime.UtcNow + timeout;
@@ -383,11 +319,7 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
         return last;
     }
 
-    // Hands over a fixed prefix and then parks: once the prefix is drained, every further
-    // read completes only by being cancelled. SL-05 needs a read to be outstanding when
-    // the token is cancelled, and a MemoryStream cannot supply one -- it reaches its end
-    // in microseconds, after which nothing is left for the token to interrupt and whether
-    // the case tests anything would turn on that race.
+    // SL-05 needs a read outstanding when the token fires; a MemoryStream reaches EOF too fast.
     private sealed class ParkingStream(byte[] prefix) : Stream
     {
         private readonly MemoryStream _prefix = new(prefix);
@@ -439,9 +371,6 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
         }
     }
 
-    // Stands in for TemporaryRunSet, which Program disposes the moment a strategy
-    // returns: a run created after Close is a file created after the cleanup that would
-    // have removed it, which is precisely what a spill outliving its strategy does.
     private sealed class RunRegistry
     {
         private int _closed;

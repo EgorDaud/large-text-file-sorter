@@ -1,7 +1,8 @@
+using FileSorter.Cli;
 using FileSorter.Verification;
 using Xunit;
 
-namespace FileSorter.Tests.Verification;
+namespace FileSorter.Tests.Cli;
 
 public sealed class VerifyOptionsTests
 {
@@ -14,7 +15,7 @@ public sealed class VerifyOptionsTests
         Assert.NotNull(options);
         Assert.Equal("in.txt", options.InputPath);
         Assert.Equal("out.txt", options.OutputPath);
-        Assert.Equal(64 * 1024, options.MaxLineLength); // same documented default as sort mode
+        Assert.Equal(64 * 1024, options.MaxLineLength);
     }
 
     [Fact]
@@ -30,11 +31,6 @@ public sealed class VerifyOptionsTests
     [Fact]
     public void Parsing_rejects_a_max_line_value_that_would_overflow_the_fixed_scan_buffer()
     {
-        // OutputVerifier.ScanAsync allocates one fixed buffer of
-        // OutputVerifier.BaseBufferSize + maxLineLength bytes per file, so verify mode
-        // has a lower --max-line ceiling than sort mode's much larger one. A value
-        // between the two ceilings would otherwise reach that allocation and throw an
-        // unhandled ArgumentOutOfRangeException instead of a documented exit 3.
         long ceiling = Array.MaxLength - OutputVerifier.BaseBufferSize;
 
         Assert.False(VerifyOptions.TryParse(
@@ -60,12 +56,12 @@ public sealed class VerifyOptionsTests
     }
 
     [Theory]
-    [InlineData("--verify")]                                          // no input, no output
-    [InlineData("--verify", "in.txt")]                                // no output
-    [InlineData("--verify", "in.txt", "out.txt", "extra.txt")]        // a third positional
-    [InlineData("--verify", "in.txt", "out.txt", "--memory", "1GiB")] // --memory is not a verify-mode option
-    [InlineData("--verify", "in.txt", "out.txt", "--max-line", "0")]  // non-positive
-    [InlineData("--verify", "in.txt", "out.txt", "--max-line")]       // value missing
+    [InlineData("--verify")]
+    [InlineData("--verify", "in.txt")]
+    [InlineData("--verify", "in.txt", "out.txt", "extra.txt")]
+    [InlineData("--verify", "in.txt", "out.txt", "--memory", "1GiB")]
+    [InlineData("--verify", "in.txt", "out.txt", "--max-line", "0")]
+    [InlineData("--verify", "in.txt", "out.txt", "--max-line")]
     public void Parsing_when_an_argument_is_unusable_explains_which_one(params string[] args)
     {
         Assert.False(VerifyOptions.TryParse(args, out VerifyOptions? options, out string? error));

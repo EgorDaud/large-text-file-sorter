@@ -31,9 +31,6 @@ public sealed class TempCapacityTests
     [Trait("Case", "SC-03")]
     public void Treats_free_space_exactly_equal_to_the_requirement_as_sufficient()
     {
-        // The comparison is deliberately inclusive: the multiplier is already a
-        // conservative upper bound, so a volume that meets the requirement exactly is a
-        // run the bound itself says will fit.
         CapacityDecision decision = TempCapacity.Evaluate(inputSizeBytes: 1_000_000, freeBytes: 2_000_000);
 
         Assert.Equal(CapacityOutcome.Sufficient, decision.Outcome);
@@ -58,8 +55,8 @@ public sealed class TempCapacityTests
         CapacityDecision decision = TempCapacity.Evaluate(inputSizeBytes: 1_000_000, freeBytes: null);
 
         Assert.Equal(CapacityOutcome.Unknown, decision.Outcome);
-        Assert.Equal(2_000_000, decision.RequiredBytes); // still known, independent of free space
-        Assert.Equal(-1, decision.AvailableBytes);        // never 0 -- 0 would read as "0 bytes available"
+        Assert.Equal(2_000_000, decision.RequiredBytes);
+        Assert.Equal(-1, decision.AvailableBytes);
     }
 
     [Theory]
@@ -67,35 +64,30 @@ public sealed class TempCapacityTests
     [InlineData(0, 0)]
     [InlineData(1_000, 2_000)]
     [InlineData(1_000_000, 2_000_000)]
-    [InlineData(1_000_000_000_000, 2_000_000_000_000)] // 1 TB input, several orders of magnitude up from the others
+    [InlineData(1_000_000_000_000, 2_000_000_000_000)]
     public void Computes_the_requirement_as_exactly_twice_the_input_size_across_several_magnitudes(
         long inputSizeBytes, long expectedRequiredBytes)
     {
         CapacityDecision decision = TempCapacity.Evaluate(inputSizeBytes, freeBytes: long.MaxValue);
 
         Assert.Equal(expectedRequiredBytes, decision.RequiredBytes);
-        Assert.Equal(TempCapacity.RequirementMultiplier, 2); // the multiplier is 2, named rather than reasserted inline
+        Assert.Equal(TempCapacity.RequirementMultiplier, 2);
     }
 
     [Fact]
     [Trait("Case", "SC-06")]
     public void Clamps_the_requirement_instead_of_overflowing_for_an_input_near_the_long_range()
     {
-        // inputSizeBytes * 2 wraps into a negative number well before inputSizeBytes
-        // reaches long.MaxValue, so the requirement clamps instead.
         CapacityDecision decision = TempCapacity.Evaluate(inputSizeBytes: long.MaxValue, freeBytes: long.MaxValue);
 
         Assert.Equal(long.MaxValue, decision.RequiredBytes);
-        Assert.True(decision.RequiredBytes >= 0); // never wrapped negative
+        Assert.True(decision.RequiredBytes >= 0);
     }
 
     [Fact]
     [Trait("Case", "SC-07")]
     public void EvaluateSameVolume_requires_twice_the_input_plus_the_capacity_margin()
     {
-        // When --temp defaults to the output's own directory, both live on one volume,
-        // and the combined bound is Evaluate's twice-the-input bound plus a small
-        // margin -- not a second, larger multiplier stacked on top of it.
         const long inputSizeBytes = 1_000_000;
         long required = (inputSizeBytes * TempCapacity.RequirementMultiplier) + TempCapacity.CapacityMarginBytes;
 
@@ -111,11 +103,6 @@ public sealed class TempCapacityTests
     [Trait("Case", "SC-08")]
     public void EvaluateOutputVolume_requires_roughly_one_input_size_plus_the_capacity_margin()
     {
-        // The output file never exceeds the input's size, because run files are
-        // '\n'-normalised, so the output volume's bound uses a multiplier of one plus
-        // the same margin. That is strictly less than the temp volume requires once the
-        // input is large enough for the fixed margin not to dominate -- hence the 1 GB
-        // input here rather than the smaller ones the other cases use.
         const long inputSizeBytes = 1_000_000_000;
         long required = inputSizeBytes + TempCapacity.CapacityMarginBytes;
 

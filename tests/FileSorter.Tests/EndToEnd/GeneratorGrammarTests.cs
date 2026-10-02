@@ -6,18 +6,14 @@ namespace FileSorter.Tests.EndToEnd;
 
 public sealed class GeneratorGrammarTests
 {
-    // The sorter's own CLI default, not the generator's much smaller
-    // MaxComposedLineLength: this test stands in for the sorter reading a real file,
-    // and the sorter's default is what each line has to fit inside.
+    // The sorter's CLI default, not the generator's smaller MaxComposedLineLength.
     private const int SorterMaxLineLength = 64 * 1024;
 
     [Fact]
     [Trait("Case", "GN-09")]
     public void Parsing_real_generator_output_with_the_sorters_own_parser_accepts_every_line()
     {
-        // Deliberately does not call TestFileGenerator.Tests' GeneratedOutput.Parse.
-        // That helper is the generator side's own independent oracle; routing this
-        // test through it would let the two programs drift and still pass.
+        // Deliberately not GeneratedOutput.Parse: the two programs must not share a parser here.
         GeneratorOptions options = new("unused-by-composition", TargetBytes: 0, Seed: 11, DuplicateRatio: 0.2);
         LineComposer composer = new(options);
 
@@ -44,7 +40,7 @@ public sealed class GeneratorGrammarTests
             linesParsed++;
         }
 
-        Assert.Equal(0, cursor.CarryLength); // FileWriter never emits a partial final line
+        Assert.Equal(0, cursor.CarryLength);
         Assert.True(linesParsed > 0);
     }
 }

@@ -5,7 +5,7 @@ namespace FileSorter.Tests.LineFormat;
 
 public sealed class LineStagerTests
 {
-    // The stager reuses its buffer, so each write is copied at the moment it happens.
+    // The stager reuses its buffer, so each write must be copied when it happens.
     private static LineStager CreateStager(int bufferSize, List<string> writes) =>
         new(new byte[bufferSize], data =>
         {
@@ -31,7 +31,6 @@ public sealed class LineStagerTests
     [Trait("Case", "CM-11")]
     public async Task Lines_that_fill_the_buffer_exactly_are_staged_without_a_write()
     {
-        // 6 + 1 + 4 + 1 = 12 bytes fill a 12-byte buffer exactly.
         List<string> writes = [];
         LineStager stager = CreateStager(12, writes);
 
@@ -67,7 +66,6 @@ public sealed class LineStagerTests
     [Trait("Case", "CM-11")]
     public async Task A_line_larger_than_the_buffer_is_written_directly_after_the_staged_lines()
     {
-        // The line needs 9 bytes with its LF; the buffer holds 8.
         List<string> writes = [];
         LineStager stager = CreateStager(8, writes);
         Assert.True(stager.TryAdd("1. A"u8));
@@ -77,7 +75,6 @@ public sealed class LineStagerTests
         await stager.AddAfterFlushAsync(source, 0, source.Length);
         Assert.Equal(["1. A\n", "1. Apple", "\n"], writes);
 
-        // Nothing is left staged, and the buffer is usable again.
         await stager.FlushAsync();
         Assert.Equal(3, writes.Count);
         Assert.True(stager.TryAdd("2. B"u8));

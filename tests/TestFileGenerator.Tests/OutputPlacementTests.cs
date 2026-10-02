@@ -3,10 +3,6 @@ using Xunit;
 
 namespace TestFileGenerator.Tests;
 
-// StagedOutput.Write, not Main: Main is a private entry point and cannot be driven
-// directly from a test, the way FileSorter's own Program.RunAsync can be. StagedOutput.Write
-// carries the whole write-then-replace behaviour Main delegates to, so exercising it
-// here is exercising the real path.
 public sealed class OutputPlacementTests : IDisposable
 {
     private readonly string _directory =
@@ -46,10 +42,7 @@ public sealed class OutputPlacementTests : IDisposable
     [Trait("Case", "GW-02")]
     public void A_failed_replace_of_a_locked_destination_leaves_it_untouched_and_deletes_only_the_staging_file()
     {
-        // Windows-only reproduction: a destination held open for read with delete
-        // sharing denies the write access the final File.Move needs, without denying
-        // the delete a plain rename would use. A Unix rename does not distinguish
-        // these cases, so nothing here would fail on Linux the same way.
+        // On Windows a reader sharing only Read | Delete denies the write access File.Move's overwrite needs.
         Assert.SkipUnless(OperatingSystem.IsWindows(), "FileShare-based write denial is a Windows sharing-mode concept.");
 
         string outputPath = Path.Combine(_directory, "out.txt");
@@ -73,9 +66,7 @@ public sealed class OutputPlacementTests : IDisposable
     [Trait("Case", "GW-03")]
     public void A_cancelled_write_deletes_the_staging_file_and_leaves_an_existing_destination_untouched()
     {
-        // Cancelling from the progress callback is deterministic: the writer polls the
-        // token right after each report, so the write stops at the first one. Main maps
-        // the exception to exit 130; no real signal can be sent from a test.
+        // Deterministic because FileWriter polls the token right after each progress report.
         string outputPath = Path.Combine(_directory, "out.txt");
         byte[] previousContent = "previous output, not this run's"u8.ToArray();
         File.WriteAllBytes(outputPath, previousContent);

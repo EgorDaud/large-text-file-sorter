@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+using Shared;
 
 namespace FileSorter.Infrastructure;
 
@@ -8,14 +8,13 @@ internal sealed class TemporaryRunSet : IDisposable
 
     private readonly string _directory;
 
-    // Spillers create paths concurrently. The lock protects both the cleanup set and
-    // the monotonically increasing run number.
+    // Spillers create paths concurrently; guards _paths, _deferred and _nextRun.
     private readonly Lock _gate = new();
     private readonly HashSet<string> _paths = [];
+    private readonly HashSet<string> _deferred = [];
 
     private int _nextRun;
 
-    // Created only after Program's disk-capacity check has passed.
     private string? _privateDirectory;
 
     public TemporaryRunSet(string tempDirectory)
@@ -35,11 +34,32 @@ internal sealed class TemporaryRunSet : IDisposable
         }
     }
 
-    // Best-effort: a scanner or indexer can briefly hold a finished run, and that must
-    // not abort a long merge or make Program discard a completed output. A path is
-    // untracked only once its delete succeeded, so a failed one stays tracked and
-    // Dispose retries it. The delete itself stays outside the lock.
+    // Best-effort: an AV scanner or indexer can briefly hold a run, which must not abort the sort.
+    // Failures stay tracked and are retried here and in Dispose, since the capacity check assumes freed runs.
     public void Delete(string runPath)
+    {
+        if (TryDelete(runPath) is { } failure)
+        {
+            Console.Error.WriteLine(
+                $"Could not delete the temporary run file at {runPath}, retrying later: {failure.Message}");
+        }
+
+        string[] deferred;
+        lock (_gate)
+        {
+            deferred = [.. _deferred];
+        }
+
+        foreach (string path in deferred)
+        {
+            if (path != runPath)
+            {
+                TryDelete(path);
+            }
+        }
+    }
+
+    private Exception? TryDelete(string runPath)
     {
         try
         {
@@ -47,67 +67,70 @@ internal sealed class TemporaryRunSet : IDisposable
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Console.Error.WriteLine(
-                $"Could not delete the temporary run file at {runPath}, retrying at exit: {ex.Message}");
-            return;
+            lock (_gate)
+            {
+                _deferred.Add(runPath);
+            }
+
+            return ex;
         }
 
         lock (_gate)
         {
             _paths.Remove(runPath);
+            _deferred.Remove(runPath);
         }
+
+        return null;
     }
 
     public void Dispose()
     {
-        // Delete outside the lock because filesystem operations can block.
         string[] paths;
         string? privateDirectory;
         lock (_gate)
         {
             paths = [.. _paths];
             _paths.Clear();
+            _deferred.Clear();
             privateDirectory = _privateDirectory;
         }
 
-        // Cleanup can follow a partial failure, so an already-removed file is routine.
+        int leftover = 0;
         foreach (string path in paths)
         {
             try
             {
                 File.Delete(path);
             }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-            }
-            catch (UnauthorizedAccessException)
-            {
+                leftover++;
             }
         }
 
-        // The private directory belongs to this invocation.
         if (privateDirectory is not null)
         {
             try
             {
                 Directory.Delete(privateDirectory);
             }
-            catch (IOException)
+            catch (DirectoryNotFoundException)
             {
             }
-            catch (UnauthorizedAccessException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                string runs = leftover > 0 ? $", which still holds {leftover} run file(s)" : string.Empty;
+                Console.Error.WriteLine($"Could not remove the temporary directory {privateDirectory}{runs}: {ex.Message}");
             }
         }
     }
 
-    // A process ID and random suffix isolate concurrent invocations. A pre-existing
-    // candidate is treated as a collision and retried.
     private string CreatePrivateDirectory()
     {
         for (int attempt = 0; attempt < MaxPrivateDirectoryAttempts; attempt++)
         {
-            string candidate = Path.Combine(_directory, $"sorter-{Environment.ProcessId}-{RandomSuffix()}");
+            string candidate = Path.Combine(_directory, $"sorter-{Environment.ProcessId}-{StagingFile.RandomSuffix()}");
             if (Directory.Exists(candidate))
             {
                 continue;
@@ -118,13 +141,5 @@ internal sealed class TemporaryRunSet : IDisposable
         }
 
         throw new IOException($"Could not create a private temporary directory beneath '{_directory}' after {MaxPrivateDirectoryAttempts} attempts.");
-    }
-
-    // Shared with StagingFile so both name their files the same way.
-    internal static string RandomSuffix()
-    {
-        Span<byte> bytes = stackalloc byte[4];
-        RandomNumberGenerator.Fill(bytes);
-        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 }

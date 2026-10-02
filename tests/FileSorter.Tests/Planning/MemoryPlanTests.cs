@@ -5,8 +5,6 @@ using Xunit;
 
 namespace FileSorter.Tests.Planning;
 
-// MemoryPlan's one rule: every derived quantity is a computed member of the primary
-// constructor's parameters, never a parameter itself. These tests are that rule.
 public sealed class MemoryPlanTests
 {
     [Fact]
@@ -24,8 +22,8 @@ public sealed class MemoryPlanTests
             MergeParallelism: 3);
 
         Assert.Equal(Unsafe.SizeOf<LineDescriptor>(), MemoryPlan.DescriptorSize);
-        Assert.Equal(5, plan.PoolCapacity);      // Parallelism + 2
-        Assert.Equal(1000, plan.PendingBytesSize); // exactly ChunkSize
+        Assert.Equal(5, plan.PoolCapacity);
+        Assert.Equal(1000, plan.PendingBytesSize);
 
         long expectedBytesPerSlot = 1000L + 10L * MemoryPlan.DescriptorSize;
         Assert.Equal(expectedBytesPerSlot, plan.BytesPerSlot);
@@ -33,20 +31,9 @@ public sealed class MemoryPlanTests
         long expectedPhaseOne = 5L * expectedBytesPerSlot + 1000L + 3L * 200L;
         Assert.Equal(expectedPhaseOne, plan.WorstCasePhaseOneBytes);
 
-        // ReadAheadBufferSize counts twice: a cursor holds two equal-size windows so a
-        // fill can be in flight while the other is scanned.
         long expectedBytesPerRunCursor = 2L * 64L + 4L * MemoryPlan.DescriptorSize;
         Assert.Equal(expectedBytesPerRunCursor, plan.BytesPerRunCursor);
 
-        // MergeParallelism (3) multiplies both phase-two terms, not only the cursor one:
-        // every worker opens every run of its group AND stages its own output through
-        // its own OutputBufferSize array.
-        //
-        // MergeMetadataBytes is a third addend: three workers' own loser trees
-        // (MergeParallelism * MergeFanIn * LoserTreeBytesPerFanInSlot) plus, since
-        // MergeParallelism is above 1, the partition's offset table (MergeFanIn *
-        // (MergeParallelism + 1) * PartitionOffsetEntrySize -- one shared array whose
-        // WIDTH, not its whole size, scales with the worker count).
         long expectedMetadata = 3L * 8L * MemoryPlan.LoserTreeBytesPerFanInSlot
             + 8L * (3L + 1L) * MemoryPlan.PartitionOffsetEntrySize;
         Assert.Equal(expectedMetadata, plan.MergeMetadataBytes);
@@ -54,9 +41,6 @@ public sealed class MemoryPlanTests
         long expectedPhaseTwo = 3L * 8L * expectedBytesPerRunCursor + 3L * 128L + expectedMetadata;
         Assert.Equal(expectedPhaseTwo, plan.WorstCasePhaseTwoBytes);
 
-        // At one worker the loser-tree term is still live (KWayMerge.MergeAsync always
-        // builds one) but the partition-offset term is exactly zero, because
-        // MergeExecutor never partitions at a single worker.
         MemoryPlan sequential = plan with { MergeParallelism = 1 };
         long expectedSequentialMetadata = 1L * 8L * MemoryPlan.LoserTreeBytesPerFanInSlot;
         Assert.Equal(expectedSequentialMetadata, sequential.MergeMetadataBytes);
@@ -66,12 +50,6 @@ public sealed class MemoryPlanTests
     [Fact]
     public void LoserTreeBytesPerFanInSlot_matches_RunHeads_own_measured_size_plus_one_int()
     {
-        // MergeMetadataBytes prices KWayMerge.LoserTree's per-slot cost (one RunHead in
-        // its _heads array, one int in its _tree array) into the phase-two budget.
-        // RunHead is a standalone `internal` struct rather than private to KWayMerge so this assertion
-        // can measure the real struct directly: a field added to RunHead, or to the
-        // LineDescriptor it embeds, fails here rather than silently under-pricing the
-        // budget.
         Assert.Equal(40, Unsafe.SizeOf<RunHead>()); // byte[]? reference (8) + LineDescriptor (32)
         Assert.Equal(Unsafe.SizeOf<RunHead>() + sizeof(int), MemoryPlan.LoserTreeBytesPerFanInSlot);
     }

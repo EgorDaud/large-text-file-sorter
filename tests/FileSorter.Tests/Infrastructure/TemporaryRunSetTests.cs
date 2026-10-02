@@ -4,13 +4,7 @@ using Xunit;
 
 namespace FileSorter.Tests.Infrastructure;
 
-// The one type in this slice that is allowed to touch the real file system: it exists
-// specifically to own temp files, so its tests use a real scratch directory rather than
-// a MemoryStream. The temp directory is a not-yet-created child of a TempDirectory, so
-// tests can watch TemporaryRunSet create it, and the scratch root's removal leaves the
-// suite clean regardless of what TemporaryRunSet's own cleanup does.
-// In the "Program" collection because TR-05 makes Delete write to the process-wide
-// Console.Error, which the sort tests swap out to capture their own stderr.
+// TR-05 to TR-07 write to the process-wide Console.Error, which other "Program" tests swap out.
 [Collection("Program")]
 public sealed class TemporaryRunSetTests : IDisposable
 {
@@ -40,8 +34,6 @@ public sealed class TemporaryRunSetTests : IDisposable
     [Trait("Case", "TR-02")]
     public void Two_instances_sharing_the_same_temp_parent_use_different_private_directories()
     {
-        // Two invocations sharing --temp must never be able to name the same run
-        // file, even by coincidence of both starting their own counter at 1.
         using TemporaryRunSet first = new(_directory);
         using TemporaryRunSet second = new(_directory);
 
@@ -56,9 +48,6 @@ public sealed class TemporaryRunSetTests : IDisposable
     [Trait("Case", "TR-03")]
     public void Constructing_the_set_does_not_yet_create_a_private_directory()
     {
-        // The private directory is created on the first CreateRunPath call, not in
-        // the constructor: Program relies on that ordering to keep this invocation's
-        // own namespace off disk until the disk-capacity precheck has passed.
         using TemporaryRunSet runs = new(_directory);
 
         Assert.Empty(Directory.GetDirectories(_directory));
@@ -70,9 +59,6 @@ public sealed class TemporaryRunSetTests : IDisposable
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Deleting an open file succeeds on Unix; only Windows raises a sharing violation.");
 
-        // A scanner or indexer briefly holding a finished run is the case: the delete
-        // fails, must not abort the caller, and must leave the path tracked so Dispose
-        // gets another chance once the holder is gone.
         TemporaryRunSet runs = new(_directory);
         string path = runs.CreateRunPath();
         File.WriteAllBytes(path, [1, 2, 3]);
@@ -99,6 +85,57 @@ public sealed class TemporaryRunSetTests : IDisposable
     }
 
     [Fact]
+    [Trait("Case", "TR-06")]
+    public void A_run_whose_delete_failed_is_removed_by_the_next_delete_once_released()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Deleting an open file succeeds on Unix; only Windows raises a sharing violation.");
+
+        using TemporaryRunSet runs = new(_directory);
+        string held = runs.CreateRunPath();
+        string next = runs.CreateRunPath();
+        File.WriteAllBytes(held, [1, 2, 3]);
+        File.WriteAllBytes(next, [4, 5, 6]);
+
+        using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            runs.Delete(held);
+            Assert.True(File.Exists(held));
+        }
+
+        runs.Delete(next);
+
+        Assert.False(File.Exists(held));
+        Assert.False(File.Exists(next));
+    }
+
+    [Fact]
+    [Trait("Case", "TR-07")]
+    public void A_run_still_held_at_dispose_is_reported_once_naming_the_private_directory()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Deleting an open file succeeds on Unix; only Windows raises a sharing violation.");
+
+        TemporaryRunSet runs = new(_directory);
+        string held = runs.CreateRunPath();
+        string released = runs.CreateRunPath();
+        File.WriteAllBytes(held, [1, 2, 3]);
+        File.WriteAllBytes(released, [4, 5, 6]);
+        string privateDirectory = Path.GetDirectoryName(held)!;
+
+        string stderr;
+        using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            stderr = ConsoleCapture.Error(runs.Dispose);
+        }
+
+        string[] lines = stderr.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        string line = Assert.Single(lines);
+        Assert.Contains(privateDirectory, line, StringComparison.Ordinal);
+        Assert.Contains("1 run file(s)", line, StringComparison.Ordinal);
+        Assert.True(File.Exists(held));
+        Assert.False(File.Exists(released));
+    }
+
+    [Fact]
     public void Creating_two_run_paths_never_collide()
     {
         using TemporaryRunSet runs = new(_directory);
@@ -119,7 +156,7 @@ public sealed class TemporaryRunSetTests : IDisposable
         runs.Delete(path);
 
         Assert.False(File.Exists(path));
-        runs.Dispose(); // must not throw attempting to delete a path it already forgot
+        runs.Dispose();
     }
 
     [Fact]
@@ -140,10 +177,6 @@ public sealed class TemporaryRunSetTests : IDisposable
     [Fact]
     public void Creating_run_paths_concurrently_records_every_one_of_them()
     {
-        // Every spiller under either strategy creates its run path on its own thread, so
-        // this is the ordinary way the type is used, not a stress case. An unsynchronised
-        // set can throw from inside its own hash table here, or quietly lose an entry —
-        // and a lost entry is a run file Dispose never hears about and never deletes.
         const int threads = 8;
         const int perThread = 500;
         TemporaryRunSet runs = new(_directory);
@@ -170,8 +203,6 @@ public sealed class TemporaryRunSetTests : IDisposable
 
         runs.Dispose();
 
-        // Nothing left behind is the whole point: a dropped entry shows up here as a file
-        // that outlived the set that was supposed to own it.
         Assert.Empty(Directory.GetFiles(_directory));
     }
 
@@ -181,7 +212,7 @@ public sealed class TemporaryRunSetTests : IDisposable
         TemporaryRunSet runs = new(_directory);
         string path = runs.CreateRunPath();
         File.WriteAllBytes(path, [1]);
-        File.Delete(path); // simulates a deletion TemporaryRunSet never learns about
+        File.Delete(path);
 
         Exception? thrown = Record.Exception(runs.Dispose);
 
@@ -191,10 +222,6 @@ public sealed class TemporaryRunSetTests : IDisposable
     [Fact]
     public void Disposing_leaves_the_temp_directory_in_place_whether_or_not_this_instance_created_it()
     {
-        // The parent is always left alone: two invocations can share one --temp, so
-        // neither can safely decide it owns it -- not even the one whose constructor
-        // happened to create it, and not merely because it is empty by the time
-        // Dispose runs.
         TemporaryRunSet created = new(_directory);
         created.Dispose();
         Assert.True(Directory.Exists(_directory));
@@ -208,9 +235,6 @@ public sealed class TemporaryRunSetTests : IDisposable
     [Trait("Case", "TR-04")]
     public void Disposing_removes_the_private_directory_even_when_the_parent_already_existed()
     {
-        // The private directory is this invocation's own namespace regardless of
-        // whether --temp's parent predates the run, so it is always removed on
-        // dispose -- unlike the parent itself, which a pre-existing directory keeps.
         Directory.CreateDirectory(_directory);
         TemporaryRunSet runs = new(_directory);
         string path = runs.CreateRunPath();
@@ -227,9 +251,6 @@ public sealed class TemporaryRunSetTests : IDisposable
     [Fact]
     public void Disposing_leaves_a_temp_directory_with_unrelated_content_in_place()
     {
-        // --temp defaults to the output file's own directory, so deleting a non-empty
-        // directory here would be destructive: it may hold the output file, or anything
-        // else that happens to live alongside it.
         TemporaryRunSet runs = new(_directory);
         string path = runs.CreateRunPath();
         File.WriteAllBytes(path, [1]);
@@ -240,6 +261,6 @@ public sealed class TemporaryRunSetTests : IDisposable
 
         Assert.True(Directory.Exists(_directory));
         Assert.True(File.Exists(unrelated));
-        Assert.False(File.Exists(path)); // the run file itself is still cleaned up
+        Assert.False(File.Exists(path));
     }
 }

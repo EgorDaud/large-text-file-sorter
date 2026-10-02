@@ -1,17 +1,25 @@
-using System.Globalization;
-
 namespace FileSorter.Infrastructure;
 
-// Shared by every progress line: the reporting interval, the byte-count formatter, and the
-// wrapper that runs a phase beside its periodic reporter.
 internal static class ProgressReporter
 {
     internal const int IntervalMilliseconds = 2000;
 
-    private static readonly string[] SizeNames = ["B", "KiB", "MiB", "GiB"];
+    internal static async Task TickAsync(Func<string> line, CancellationToken ct)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(IntervalMilliseconds, ct);
+                Console.Error.WriteLine(line());
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
 
-    // Starts report beside work and stops it when the work ends, however it ends. Reporters
-    // swallow their own cancellation, so awaiting one after Cancel never throws.
+    // report must swallow its own cancellation, or the await in finally throws and masks work's outcome.
     internal static async Task<T> RunWithProgressAsync<T>(
         Func<CancellationToken, Task> report, Func<Task<T>> work, CancellationToken ct)
     {
@@ -35,21 +43,4 @@ internal static class ProgressReporter
             await work();
             return 0;
         }, ct);
-
-    internal static string Describe(long bytes)
-    {
-        double value = bytes;
-        int name = 0;
-
-        // Round before choosing a unit so near-boundary values read as 1.0 GiB.
-        while (Math.Round(value, 1) >= 1024 && name < SizeNames.Length - 1)
-        {
-            value /= 1024;
-            name++;
-        }
-
-        return name == 0
-            ? string.Create(CultureInfo.InvariantCulture, $"{bytes} B")
-            : string.Create(CultureInfo.InvariantCulture, $"{value:F1} {SizeNames[name]}");
-    }
 }

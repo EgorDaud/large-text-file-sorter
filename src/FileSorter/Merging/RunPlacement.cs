@@ -1,25 +1,23 @@
 using FileSorter.Infrastructure;
+using Shared;
 
 namespace FileSorter.Merging;
 
 internal static class RunPlacement
 {
-    // If a move cannot cross volumes, copy to a staging file beside outputPath, then move
-    // it into place. A failure leaves outputPath unchanged or fully replaced. Delete the
-    // source last and best-effort, so cleanup failure cannot fail a completed placement.
-    // Tests pass their own tryMove to force the copy fallback.
     public static void Place(string runPath, string outputPath, TemporaryRunSet runs, Func<string, string, bool>? tryMove = null)
     {
-        if ((tryMove ?? TryMove)(runPath, outputPath))
-        {
-            return;
-        }
-
         string staging = StagingFile.CreatePath(outputPath);
+        bool copied = false;
         try
         {
-            File.Copy(runPath, staging, overwrite: false);
-            File.Move(staging, outputPath, overwrite: true);
+            if (!(tryMove ?? TryMove)(runPath, staging))
+            {
+                File.Copy(runPath, staging, overwrite: false);
+                copied = true;
+            }
+
+            ReplaceDestination(staging, outputPath);
         }
         catch
         {
@@ -27,10 +25,12 @@ internal static class RunPlacement
             throw;
         }
 
-        runs.Delete(runPath);
+        if (copied)
+        {
+            runs.Delete(runPath);
+        }
     }
 
-    // Empty input still needs an output file, created the same atomic way.
     public static void PlaceEmpty(string outputPath)
     {
         string staging = StagingFile.CreatePath(outputPath);
@@ -40,7 +40,7 @@ internal static class RunPlacement
             {
             }
 
-            File.Move(staging, outputPath, overwrite: true);
+            ReplaceDestination(staging, outputPath);
         }
         catch
         {
@@ -49,6 +49,20 @@ internal static class RunPlacement
         }
     }
 
+    // Only this rename's failure is the destination's fault; staging-write failures stay plain I/O.
+    private static void ReplaceDestination(string staging, string outputPath)
+    {
+        try
+        {
+            File.Move(staging, outputPath, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new DestinationReplaceFailedException(outputPath, ex);
+        }
+    }
+
+    // A cross-volume move can throw after copying, leaving a file at the staging path.
     private static bool TryMove(string from, string to)
     {
         try
@@ -58,6 +72,7 @@ internal static class RunPlacement
         }
         catch (IOException)
         {
+            StagingFile.Delete(to);
             return false;
         }
     }

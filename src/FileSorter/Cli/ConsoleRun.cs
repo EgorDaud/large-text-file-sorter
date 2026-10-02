@@ -1,48 +1,31 @@
-using System.Runtime.InteropServices;
 using FileSorter.LineFormat;
+using FileSorter.Merging;
+using Shared;
 
 namespace FileSorter.Cli;
 
-// Runs a command body under the process-level cancellation and failure policy that sort
-// and verify share: the first Ctrl+C or SIGTERM unwinds through cleanup, a repeat ends
-// the process at once, and the failures a run can meet map to exit codes.
 internal static class ConsoleRun
 {
     internal static int Run(Func<CancellationToken, Task<int>> body)
     {
-        using CancellationTokenSource cts = new();
-
-        // Only the first request is handled. Leaving Cancel unset on a repeat lets the
-        // default action terminate the process while a slow cleanup is still running.
-        bool BeginCancel()
-        {
-            if (cts.IsCancellationRequested)
-            {
-                return false;
-            }
-
-            cts.Cancel();
-            return true;
-        }
-
-        ConsoleCancelEventHandler onCancelKey = (_, e) => e.Cancel = BeginCancel();
-        Action<PosixSignalContext> onSignal = context => context.Cancel = BeginCancel();
-        // SIGHUP is left alone so a sort started under nohup survives the session ending.
-        using PosixSignalRegistration terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, onSignal);
-        Console.CancelKeyPress += onCancelKey;
+        using ConsoleCancellation cancellation = new();
 
         try
         {
-            return body(cts.Token).GetAwaiter().GetResult();
+            return body(cancellation.Token).GetAwaiter().GetResult();
         }
         catch (OperationCanceledException)
         {
             return ExitCodes.Cancelled;
         }
+        catch (PreflightException ex)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return ex.ExitCode;
+        }
         catch (DestinationReplaceFailedException ex)
         {
-            // Its inner failure is I/O, but a destination that cannot be replaced is
-            // reported like an invalid output path rather than as exit 5.
+            // Deliberately an argument error, not IoFailure, though the inner failure is I/O.
             Console.Error.WriteLine(ex.Message);
             return ExitCodes.InvalidArguments;
         }
@@ -55,10 +38,6 @@ internal static class ConsoleRun
         {
             Console.Error.WriteLine($"I/O error: {ex.Message}");
             return ExitCodes.IoFailure;
-        }
-        finally
-        {
-            Console.CancelKeyPress -= onCancelKey;
         }
     }
 }

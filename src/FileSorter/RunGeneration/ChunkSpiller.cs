@@ -14,36 +14,33 @@ internal sealed class ChunkSpiller
         _spillBufferSize = spillBufferSize;
     }
 
-    // Sorts and writes one run, then returns the chunk's pool slot even on failure.
     public async Task<string> SpillAsync(Chunk chunk, CancellationToken ct)
     {
         try
         {
+            // Strategies start spills even after cancellation so the finally releases the slot.
+            ct.ThrowIfCancellationRequested();
+
             byte[] buffer = chunk.Buffer.Bytes;
             LineDescriptor[] lines = chunk.Buffer.Lines;
             ChunkSorter.Sort(lines.AsSpan(0, chunk.Count), buffer);
 
             string path = _runs.CreateRunPath();
 
-            // Each output line contributes its bytes and one newline.
             long totalBytes = 0;
             for (int i = 0; i < chunk.Count; i++)
             {
                 totalBytes += lines[i].Length + 1;
             }
 
-            // The staging buffer below is the only write buffer in the memory plan, so
-            // FileStream stays unbuffered. CreateNew keeps an unexpected path collision visible.
+            // Unbuffered: the staging buffer is the only write buffer the memory plan accounts for.
             await using FileStream file = new(
                 path, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: FileStreams.Unbuffered,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
 
-            // Preallocate the exact run length to avoid incremental file growth. Verify
-            // the final position below because SetLength leaves zero-filled bytes on a short write.
             file.SetLength(totalBytes);
 
-            // A spill needs its own staging buffer because one ChunkSpiller serves
-            // concurrent calls. Each flush writes complete lines and observes cancellation.
+            // Per-call buffer: one ChunkSpiller serves concurrent spills.
             LineStager stager = CreateFileStager(new byte[_spillBufferSize], file, ct);
             for (int i = 0; i < chunk.Count; i++)
             {
@@ -54,7 +51,6 @@ internal sealed class ChunkSpiller
                 }
             }
 
-            // Flush the final staged lines because no later line can trigger it.
             await stager.FlushAsync();
 
             // A mismatched length would leave a zero-filled tail after SetLength.
@@ -72,8 +68,6 @@ internal sealed class ChunkSpiller
         }
     }
 
-    // Builds the stager here so the write callback's closure belongs to this method rather
-    // than hoisting file and ct into the async SpillAsync.
     private static LineStager CreateFileStager(byte[] buffer, FileStream file, CancellationToken ct) =>
         new(buffer, data => file.WriteAsync(data, ct));
 }

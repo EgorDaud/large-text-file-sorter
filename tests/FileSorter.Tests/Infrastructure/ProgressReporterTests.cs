@@ -3,9 +3,7 @@ using Xunit;
 
 namespace FileSorter.Tests.Infrastructure;
 
-// Drives RunWithProgressAsync with a stand-in reporter that records when it was cancelled and
-// when it finished. Its cleanup takes a moment, so it has finished by the time the call
-// returns only if the helper awaited it.
+// FakeReporter's delayed cleanup makes Finished true on return only if the helper awaited it.
 public sealed class ProgressReporterTests
 {
     private sealed class FakeReporter
@@ -96,5 +94,26 @@ public sealed class ProgressReporterTests
         Assert.True(workRan);
         Assert.True(reporter.Cancelled);
         Assert.True(reporter.Finished);
+    }
+
+    [Fact]
+    [Trait("Case", "PR-04")]
+    public async Task A_cancelled_tick_returns_quietly_without_writing_a_line()
+    {
+        bool lineRequested = false;
+        using CancellationTokenSource cts = new();
+        Task ticking = ProgressReporter.TickAsync(
+            () =>
+            {
+                lineRequested = true;
+                return string.Empty;
+            },
+            cts.Token);
+
+        await cts.CancelAsync();
+        await ticking.WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+
+        Assert.True(ticking.IsCompletedSuccessfully);
+        Assert.False(lineRequested);
     }
 }
