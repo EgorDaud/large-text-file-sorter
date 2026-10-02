@@ -1,7 +1,7 @@
-using FileSorter.Startup;
+using FileSorter.Planning;
 using Xunit;
 
-namespace FileSorter.Tests.Startup;
+namespace FileSorter.Tests.Planning;
 
 public sealed class TempCapacityTests
 {

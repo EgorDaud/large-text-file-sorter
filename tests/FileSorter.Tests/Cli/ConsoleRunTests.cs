@@ -1,8 +1,8 @@
+using FileSorter.Cli;
 using FileSorter.LineFormat;
-using FileSorter.Startup;
 using Xunit;
 
-namespace FileSorter.Tests.Startup;
+namespace FileSorter.Tests.Cli;
 
 // Drives ConsoleRun.Run with bodies that throw, so the exception-to-exit-code mapping is
 // checked without delivering a real Ctrl+C or signal to the test process. In the "Program"

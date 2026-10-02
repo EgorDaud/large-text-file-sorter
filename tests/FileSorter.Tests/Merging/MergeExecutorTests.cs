@@ -1,6 +1,7 @@
+using FileSorter.Infrastructure;
 using FileSorter.LineFormat;
 using FileSorter.Merging;
-using FileSorter.Startup;
+using FileSorter.Planning;
 using FileSorter.Tests.Support;
 using Xunit;
 

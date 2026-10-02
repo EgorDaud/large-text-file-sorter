@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using FileSorter.LineFormat;
 
-namespace FileSorter.Startup;
+namespace FileSorter.Cli;
 
 // Runs a command body under the process-level cancellation and failure policy that sort
 // and verify share: the first Ctrl+C or SIGTERM unwinds through cleanup, a repeat ends

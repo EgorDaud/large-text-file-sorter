@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Text;
+using FileSorter.Cli;
+using FileSorter.Infrastructure;
 using FileSorter.LineFormat;
 using FileSorter.Merging;
-using FileSorter.Startup;
+using FileSorter.Planning;
 using FileSorter.Tests.Support;
 using FileSorter.Verification;
 using TestFileGenerator.Generation;

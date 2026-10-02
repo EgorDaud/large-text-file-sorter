@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 
-namespace FileSorter.Startup;
+namespace FileSorter.Infrastructure;
 
 internal sealed class TemporaryRunSet : IDisposable
 {

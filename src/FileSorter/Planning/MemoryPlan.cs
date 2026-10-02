@@ -1,8 +1,7 @@
 using System.Runtime.CompilerServices;
 using FileSorter.LineFormat;
-using FileSorter.Merging;
 
-namespace FileSorter.Startup;
+namespace FileSorter.Planning;
 
 internal readonly record struct MemoryPlan(
     int ChunkSize,
@@ -39,7 +38,7 @@ internal readonly record struct MemoryPlan(
 
     // Each worker opens up to MergeFanIn cursors and owns an output buffer. MemoryBudget
     // sizes each read-ahead window per worker. Derive loser-tree storage from RunHead.
-    public static int LoserTreeBytesPerFanInSlot => Unsafe.SizeOf<KWayMerge.RunHead>() + sizeof(int);
+    public static int LoserTreeBytesPerFanInSlot => Unsafe.SizeOf<RunHead>() + sizeof(int);
 
     // One RangePartition.RunOffsets entry is a long.
     public const int PartitionOffsetEntrySize = sizeof(long);

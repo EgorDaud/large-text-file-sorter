@@ -4,9 +4,11 @@ using System.Reflection;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.Streams;
+using FileSorter.Cli;
+using FileSorter.Infrastructure;
 using FileSorter.Merging;
+using FileSorter.Planning;
 using FileSorter.RunGeneration;
-using FileSorter.Startup;
 
 namespace FileSorter.Benchmarks;
 
@@ -269,7 +271,7 @@ internal static class FlatnessRunner
     {
         // Match the production asynchronous input configuration.
         using FileStream input = new(
-            inputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: MemoryBudget.UnbufferedStream,
+            inputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: FileStreams.Unbuffered,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
         BufferPool pool = new(plan.ChunkSize, plan.DescriptorCapacity, plan.PoolCapacity);

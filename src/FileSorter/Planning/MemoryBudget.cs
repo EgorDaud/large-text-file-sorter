@@ -1,4 +1,4 @@
-namespace FileSorter.Startup;
+namespace FileSorter.Planning;
 
 internal static class MemoryBudget
 {
@@ -20,10 +20,6 @@ internal static class MemoryBudget
     // below it, and it keeps budget * assumedMeanLineLength within a long for any mean
     // line length up to 4 KiB (the CLI assumes 32), so a larger --memory cannot wrap.
     private const long MaxPlannedBudgetBytes = 1L << 50;
-
-    // Every FileStream passes this as bufferSize, which disables its internal buffer (D12). Read-ahead
-    // and staging buffers are budgeted in the plan, and a second hidden buffer would copy the data twice.
-    internal const int UnbufferedStream = 1;
 
     // KWayMerge uses this as its only output buffer. It keeps concurrent partition
     // writers from spending disproportionate time waiting for output.

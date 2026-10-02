@@ -1,8 +1,8 @@
 using FileSorter.Merging;
-using FileSorter.Startup;
+using FileSorter.Planning;
 using Xunit;
 
-namespace FileSorter.Tests.Startup;
+namespace FileSorter.Tests.Planning;
 
 // Every expected figure below is written out longhand -- computed by hand from the
 // stated inputs -- rather than by re-running the closed-form expression Calculate

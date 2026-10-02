@@ -1,6 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
+using FileSorter.Infrastructure;
 using FileSorter.LineFormat;
-using FileSorter.Startup;
 
 namespace FileSorter.Verification;
 
@@ -28,10 +28,10 @@ internal static class OutputVerifier
     public static async Task<VerificationResult> RunAsync(VerifyOptions options, CancellationToken ct)
     {
         using FileStream input = new(
-            options.InputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: MemoryBudget.UnbufferedStream,
+            options.InputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: FileStreams.Unbuffered,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         using FileStream output = new(
-            options.OutputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: MemoryBudget.UnbufferedStream,
+            options.OutputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: FileStreams.Unbuffered,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
         long inputBytes = input.Length;
@@ -210,8 +210,7 @@ internal static class OutputVerifier
                     else
                     {
                         // Match the input reader: strip a final bare CR and ignore a tail containing only CR.
-                        bool tailEndsInCarriageReturn = buffer[carryOffset + carryLength - 1] == (byte)'\r';
-                        int finalLength = tailEndsInCarriageReturn ? carryLength - 1 : carryLength;
+                        int finalLength = LineCursor.UnterminatedTailLength(buffer.AsSpan(carryOffset, carryLength));
                         if (finalLength > 0)
                         {
                             HandleLine(buffer, carryOffset, finalLength, blockBaseOffset);

@@ -1,5 +1,6 @@
 using System.Diagnostics;
-using FileSorter.Startup;
+using FileSorter.Infrastructure;
+using FileSorter.Planning;
 
 namespace FileSorter.RunGeneration;
 
@@ -9,8 +10,8 @@ internal static class RunGenerationDriver
     // Keep phase-one allocations scoped here so they can be collected before the merge
     // allocates its own budgeted buffers.
     internal static async Task<IReadOnlyList<string>> GenerateRunsAsync(
-        SorterOptions options,
         FileInfo inputInfo,
+        int maxLineLength,
         MemoryPlan plan,
         TemporaryRunSet runs,
         RunGenerationStrategy strategy,
@@ -18,14 +19,14 @@ internal static class RunGenerationDriver
         CancellationToken ct)
     {
         using FileStream input = new(
-            options.InputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: MemoryBudget.UnbufferedStream,
+            inputInfo.FullName, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: FileStreams.Unbuffered,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
         BufferPool pool = new(plan.ChunkSize, plan.DescriptorCapacity, plan.PoolCapacity);
 
         // Declared after input so asynchronous disposal waits for any fill before the
         // stream closes.
-        await using ChunkReader reader = new(input, pool, options.MaxLineLength);
+        await using ChunkReader reader = new(input, pool, maxLineLength);
         ChunkSpiller spiller = new(runs, plan.SpillBufferSize);
 
         return await ProgressReporter.RunWithProgressAsync(

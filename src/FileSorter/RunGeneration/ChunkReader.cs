@@ -7,8 +7,6 @@ namespace FileSorter.RunGeneration;
 // before parsing reveals the preceding chunk's carry, which overlaps I/O and parsing.
 internal sealed class ChunkReader : IAsyncDisposable
 {
-    private const byte CarriageReturn = (byte)'\r';
-
     [SuppressMessage(
         "Usage", "CA2213:Disposable fields should be disposed",
         Justification = "The caller owns this stream. RunGenerationDriver declares it before the reader " +
@@ -150,8 +148,7 @@ internal sealed class ChunkReader : IAsyncDisposable
                 // A final bare CR is a terminator, not line content.
                 if (!stoppedOnCapacity && carryOverLength > 0 && thisExhausted)
                 {
-                    bool tailEndsInCarriageReturn = slot.Bytes[carryOffset + carryOverLength - 1] == CarriageReturn;
-                    int finalLength = tailEndsInCarriageReturn ? carryOverLength - 1 : carryOverLength;
+                    int finalLength = LineCursor.UnterminatedTailLength(slot.Bytes.AsSpan(carryOffset, carryOverLength));
                     if (finalLength > 0)
                     {
                         slot.Lines[count] = Describe(slot.Bytes, carryOffset, finalLength, fileOffsetOfBufferZero, LinesRead + count + 1);

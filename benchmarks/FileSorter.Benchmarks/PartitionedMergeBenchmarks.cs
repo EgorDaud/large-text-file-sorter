@@ -1,7 +1,8 @@
 using BenchmarkDotNet.Attributes;
+using FileSorter.Infrastructure;
 using FileSorter.Merging;
+using FileSorter.Planning;
 using FileSorter.RunGeneration;
-using FileSorter.Startup;
 
 namespace FileSorter.Benchmarks;
 

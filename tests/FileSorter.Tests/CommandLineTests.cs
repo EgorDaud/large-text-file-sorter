@@ -1,4 +1,4 @@
-using FileSorter.Startup;
+using FileSorter.Cli;
 using Xunit;
 
 namespace FileSorter.Tests;

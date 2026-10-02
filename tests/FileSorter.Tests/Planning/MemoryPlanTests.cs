@@ -1,10 +1,9 @@
 using System.Runtime.CompilerServices;
 using FileSorter.LineFormat;
-using FileSorter.Merging;
-using FileSorter.Startup;
+using FileSorter.Planning;
 using Xunit;
 
-namespace FileSorter.Tests.Startup;
+namespace FileSorter.Tests.Planning;
 
 // MemoryPlan's one rule: every derived quantity is a computed member of the primary
 // constructor's parameters, never a parameter itself. These tests are that rule.
@@ -69,11 +68,11 @@ public sealed class MemoryPlanTests
     {
         // MergeMetadataBytes prices KWayMerge.LoserTree's per-slot cost (one RunHead in
         // its _heads array, one int in its _tree array) into the phase-two budget.
-        // KWayMerge.RunHead is `internal` rather than `private` so that this assertion
+        // RunHead is a standalone `internal` struct rather than private to KWayMerge so this assertion
         // can measure the real struct directly: a field added to RunHead, or to the
         // LineDescriptor it embeds, fails here rather than silently under-pricing the
         // budget.
-        Assert.Equal(40, Unsafe.SizeOf<KWayMerge.RunHead>()); // byte[]? reference (8) + LineDescriptor (32)
-        Assert.Equal(Unsafe.SizeOf<KWayMerge.RunHead>() + sizeof(int), MemoryPlan.LoserTreeBytesPerFanInSlot);
+        Assert.Equal(40, Unsafe.SizeOf<RunHead>()); // byte[]? reference (8) + LineDescriptor (32)
+        Assert.Equal(Unsafe.SizeOf<RunHead>() + sizeof(int), MemoryPlan.LoserTreeBytesPerFanInSlot);
     }
 }

@@ -7,8 +7,6 @@ namespace FileSorter.Merging;
 // and disposes its stream.
 internal sealed class RunCursor : IAsyncDisposable
 {
-    private const byte CarriageReturn = (byte)'\r';
-
     private readonly Stream _run;
     private readonly int _maxLineLength;
 
@@ -167,8 +165,7 @@ internal sealed class RunCursor : IAsyncDisposable
         // partial fill. A trailing CR is treated as an incomplete terminator.
         if (!stoppedOnCapacity && carryLength > 0 && _streamExhausted)
         {
-            bool tailEndsInCarriageReturn = buffer[carryOffset + carryLength - 1] == CarriageReturn;
-            int finalLength = tailEndsInCarriageReturn ? carryLength - 1 : carryLength;
+            int finalLength = LineCursor.UnterminatedTailLength(buffer.AsSpan(carryOffset, carryLength));
             if (finalLength > 0)
             {
                 _descriptors[count++] = Describe(buffer, carryOffset, finalLength, bufferBaseOffset);

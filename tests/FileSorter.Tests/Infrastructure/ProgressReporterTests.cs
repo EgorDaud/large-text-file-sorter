@@ -1,7 +1,7 @@
-using FileSorter.Startup;
+using FileSorter.Infrastructure;
 using Xunit;
 
-namespace FileSorter.Tests.Startup;
+namespace FileSorter.Tests.Infrastructure;
 
 // Drives RunWithProgressAsync with a stand-in reporter that records when it was cancelled and
 // when it finished. Its cleanup takes a moment, so it has finished by the time the call

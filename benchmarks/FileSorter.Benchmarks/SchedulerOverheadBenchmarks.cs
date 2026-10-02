@@ -2,8 +2,8 @@ using Akka.Actor;
 using Akka.Configuration;
 using Akka.Streams;
 using BenchmarkDotNet.Attributes;
+using FileSorter.Planning;
 using FileSorter.RunGeneration;
-using FileSorter.Startup;
 
 namespace FileSorter.Benchmarks;
 

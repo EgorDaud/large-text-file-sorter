@@ -1,7 +1,8 @@
 using System.Globalization;
 using CsCheck;
+using FileSorter.Infrastructure;
 using FileSorter.Merging;
-using FileSorter.Startup;
+using FileSorter.Planning;
 using FileSorter.Tests.Support;
 using Xunit;
 

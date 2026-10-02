@@ -1,11 +1,13 @@
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.Streams;
+using FileSorter.Cli;
+using FileSorter.Infrastructure;
 using FileSorter.Merging;
+using FileSorter.Planning;
 using FileSorter.RunGeneration;
-using FileSorter.Startup;
 using FileSorter.Verification;
 
 namespace FileSorter;
@@ -155,7 +157,7 @@ internal static class Program
         CancellationToken ct)
     {
         IReadOnlyList<string> runPaths =
-            await RunGenerationDriver.GenerateRunsAsync(options, inputInfo, plan, runs, strategy, clock, ct);
+            await RunGenerationDriver.GenerateRunsAsync(inputInfo, options.MaxLineLength, plan, runs, strategy, clock, ct);
 
         Console.Error.WriteLine($"  phase one produced {runPaths.Count} run(s) ({clock.Elapsed.TotalSeconds:F1}s)");
 

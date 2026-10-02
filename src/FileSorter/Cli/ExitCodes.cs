@@ -1,4 +1,4 @@
-namespace FileSorter.Startup;
+namespace FileSorter.Cli;
 
 // Shared process exit codes for sort and verify modes.
 internal static class ExitCodes

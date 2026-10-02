@@ -1,4 +1,4 @@
-using FileSorter.Startup;
+using FileSorter.Infrastructure;
 
 namespace FileSorter.Merging;
 

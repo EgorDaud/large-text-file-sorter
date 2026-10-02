@@ -1,9 +1,9 @@
 using System.Text;
 using Akka.Actor;
 using Akka.Streams;
+using FileSorter.Infrastructure;
 using FileSorter.LineFormat;
 using FileSorter.RunGeneration;
-using FileSorter.Startup;
 using FileSorter.Tests.Support;
 using Xunit;
 using static FileSorter.Tests.Support.TestTimeouts;

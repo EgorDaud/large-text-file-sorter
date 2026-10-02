@@ -1,5 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
-using FileSorter.Startup;
+using FileSorter.Cli;
 
 namespace FileSorter.Verification;
 

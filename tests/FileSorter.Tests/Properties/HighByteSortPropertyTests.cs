@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 using CsCheck;
-using FileSorter.Startup;
+using FileSorter.Planning;
 using Xunit;
 
 namespace FileSorter.Tests.Properties;

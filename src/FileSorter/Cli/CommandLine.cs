@@ -1,7 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 
-namespace FileSorter.Startup;
+namespace FileSorter.Cli;
 
 // Parses sort-mode options and the size, path and --max-line syntax VerifyOptions shares. Program prints usage
 // when parsing fails.

@@ -1,6 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
+using FileSorter.Infrastructure;
+using FileSorter.Planning;
 
-namespace FileSorter.Startup;
+namespace FileSorter.Cli;
 
 // Preflight validation for output and temp directories, volume capacity, and diagnostics.
 internal static class CapacityProbe

@@ -1,8 +1,9 @@
 using BenchmarkDotNet.Attributes;
+using FileSorter.Infrastructure;
 using FileSorter.LineFormat;
 using FileSorter.Merging;
+using FileSorter.Planning;
 using FileSorter.RunGeneration;
-using FileSorter.Startup;
 
 namespace FileSorter.Benchmarks;
 
@@ -103,13 +104,13 @@ public class MergeBenchmarks
         for (int i = 0; i < _runPaths.Count; i++)
         {
             _diskInputs[i] = new FileStream(
-                _runPaths[i], FileMode.Open, FileAccess.Read, FileShare.None, bufferSize: MemoryBudget.UnbufferedStream,
+                _runPaths[i], FileMode.Open, FileAccess.Read, FileShare.None, bufferSize: FileStreams.Unbuffered,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
         }
 
         _diskOutputPath = Path.Combine(_tempRoot, $"merge-output-{Guid.NewGuid():N}.tmp");
         _diskOutput = new FileStream(
-            _diskOutputPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: MemoryBudget.UnbufferedStream,
+            _diskOutputPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: FileStreams.Unbuffered,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
     }
 

@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace FileSorter.Startup;
+namespace FileSorter.Infrastructure;
 
 // Shared by every progress line: the reporting interval, the byte-count formatter, and the
 // wrapper that runs a phase beside its periodic reporter.

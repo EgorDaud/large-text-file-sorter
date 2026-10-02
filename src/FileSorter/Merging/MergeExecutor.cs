@@ -1,5 +1,6 @@
+using FileSorter.Infrastructure;
 using FileSorter.LineFormat;
-using FileSorter.Startup;
+using FileSorter.Planning;
 
 namespace FileSorter.Merging;
 
@@ -186,7 +187,7 @@ internal sealed class MergeExecutor
             {
                 // Cursor buffers handle read-ahead; asynchronous sequential reads match run use.
                 inputs[i] = new FileStream(
-                    current[group[i]], FileMode.Open, FileAccess.Read, FileShare.None, bufferSize: MemoryBudget.UnbufferedStream,
+                    current[group[i]], FileMode.Open, FileAccess.Read, FileShare.None, bufferSize: FileStreams.Unbuffered,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
 
                 // Runs have one LF terminator per line. A preceding CR is content, so input
@@ -198,7 +199,7 @@ internal sealed class MergeExecutor
             // private run paths require CreateNew; the final output path may replace a file.
             FileMode mode = isOutputDestination ? FileMode.Create : FileMode.CreateNew;
             output = new FileStream(
-                destination, mode, FileAccess.Write, FileShare.None, bufferSize: MemoryBudget.UnbufferedStream,
+                destination, mode, FileAccess.Write, FileShare.None, bufferSize: FileStreams.Unbuffered,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
 
             // The output path is touched as soon as its stream opens.

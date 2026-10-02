@@ -1,4 +1,5 @@
-using FileSorter.Startup;
+using FileSorter.Cli;
+using FileSorter.Infrastructure;
 
 namespace FileSorter.Verification;
 

@@ -1,5 +1,5 @@
 using BenchmarkDotNet.Running;
-using FileSorter.Startup;
+using FileSorter.Cli;
 
 namespace FileSorter.Benchmarks;
 

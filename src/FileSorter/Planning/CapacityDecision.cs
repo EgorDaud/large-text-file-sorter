@@ -1,4 +1,4 @@
-namespace FileSorter.Startup;
+namespace FileSorter.Planning;
 
 internal enum CapacityOutcome { Sufficient, Insufficient, Unknown }
 

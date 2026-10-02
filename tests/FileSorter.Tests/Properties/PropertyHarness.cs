@@ -1,4 +1,4 @@
-using FileSorter.Startup;
+using FileSorter.Cli;
 using FileSorter.Tests.Support;
 
 namespace FileSorter.Tests.Properties;

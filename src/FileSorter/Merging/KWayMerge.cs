@@ -139,23 +139,6 @@ internal static class KWayMerge
         progress.AddBytesWritten(data.Length);
     }
 
-    // Refresh a head before replaying it. A head keeps the current buffer stable while the
-    // other cursor window prefetches; a null buffer marks an exhausted leaf. Internal
-    // visibility lets MemoryPlan and tests price its size.
-    internal readonly struct RunHead
-    {
-        public readonly byte[]? Buffer;
-        public readonly LineDescriptor Descriptor;
-
-        public RunHead(byte[] buffer, LineDescriptor descriptor)
-        {
-            Buffer = buffer;
-            Descriptor = descriptor;
-        }
-
-        public bool IsAlive => Buffer is not null;
-    }
-
     // Compares live heads only. LoserTree.Wins applies the run-index tie-break.
     private static int Compare(in RunHead a, in RunHead b)
     {

@@ -1,6 +1,6 @@
 using System.Text;
+using FileSorter.Infrastructure;
 using FileSorter.RunGeneration;
-using FileSorter.Startup;
 using FileSorter.Tests.Support;
 using Xunit;
 

@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
-using FileSorter.Startup;
+using FileSorter.Infrastructure;
 
 namespace FileSorter.Merging;
 

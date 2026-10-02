@@ -1,5 +1,5 @@
+using FileSorter.Infrastructure;
 using FileSorter.Merging;
-using FileSorter.Startup;
 using FileSorter.Tests.Support;
 using Xunit;
 

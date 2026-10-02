@@ -1,7 +1,7 @@
-using FileSorter.Startup;
+using FileSorter.Infrastructure;
 using Xunit;
 
-namespace FileSorter.Tests.Startup;
+namespace FileSorter.Tests.Infrastructure;
 
 // The one type in this slice that is allowed to touch the real file system: it exists
 // specifically to own temp files, so its tests use a real scratch directory rather than

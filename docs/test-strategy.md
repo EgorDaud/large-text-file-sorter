@@ -617,7 +617,7 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 
 ### Startup ownership tests (TR)
 
-**Scope.** `tests/FileSorter.Tests/Startup/TemporaryRunSetTests.cs`. `TemporaryRunSet` touches the real file system directly and has no seam to substitute, so its existing, untraited cases already use a real scratch directory: creating and deleting run paths, tolerating a file already gone by the time `Dispose` runs, and leaving a pre-existing or non-empty `--temp` directory in place. The cases below are the ones added for the private per-invocation namespace: nothing a plain `run-########.tmp` name in the requested directory used to guarantee once two invocations, or an unrelated file, could share it.
+**Scope.** `tests/FileSorter.Tests/Infrastructure/TemporaryRunSetTests.cs`. `TemporaryRunSet` touches the real file system directly and has no seam to substitute, so its existing, untraited cases already use a real scratch directory: creating and deleting run paths, tolerating a file already gone by the time `Dispose` runs, and leaving a pre-existing or non-empty `--temp` directory in place. The cases below are the ones added for the private per-invocation namespace: nothing a plain `run-########.tmp` name in the requested directory used to guarantee once two invocations, or an unrelated file, could share it.
 
 | ID | Test name | Input | Expected outcome |
 |---|---|---|---|
@@ -631,7 +631,7 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 
 ### Console run tests (CR)
 
-**Scope.** `tests/FileSorter.Tests/Startup/ConsoleRunTests.cs`, driving `ConsoleRun.Run` -- the wrapper `Main` and `VerifyCommand` share for Ctrl+C and SIGTERM wiring and the exception-to-exit-code ladder -- with bodies that throw. No real signal is delivered: the first-request-cancels and second-request-terminates policy is three lines of `CancelKeyPress` and `PosixSignalRegistration` plumbing that a test process cannot exercise without taking itself down, so only the mapping is pinned here, and the policy is checked by reading.
+**Scope.** `tests/FileSorter.Tests/Cli/ConsoleRunTests.cs`, driving `ConsoleRun.Run` -- the wrapper `Main` and `VerifyCommand` share for Ctrl+C and SIGTERM wiring and the exception-to-exit-code ladder -- with bodies that throw. No real signal is delivered: the first-request-cancels and second-request-terminates policy is three lines of `CancelKeyPress` and `PosixSignalRegistration` plumbing that a test process cannot exercise without taking itself down, so only the mapping is pinned here, and the policy is checked by reading.
 
 | ID | Test name | Input | Expected outcome |
 |---|---|---|---|
@@ -646,7 +646,7 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 
 ### Progress-wrapper tests (PR)
 
-**Scope.** `tests/FileSorter.Tests/Startup/ProgressReporterTests.cs`, driving `ProgressReporter.RunWithProgressAsync` -- the wrapper both phase drivers (and `Program`, for phase two) use to run work beside its periodic reporter -- with a stand-in reporter. The stand-in records whether it was started, cancelled and finished, and takes a moment to finish after cancellation, so it has finished by the time the call returns only if the wrapper awaited it. The real reporters' output is covered by the end-to-end tests' stderr assertions.
+**Scope.** `tests/FileSorter.Tests/Infrastructure/ProgressReporterTests.cs`, driving `ProgressReporter.RunWithProgressAsync` -- the wrapper both phase drivers (and `Program`, for phase two) use to run work beside its periodic reporter -- with a stand-in reporter. The stand-in records whether it was started, cancelled and finished, and takes a moment to finish after cancellation, so it has finished by the time the call returns only if the wrapper awaited it. The real reporters' output is covered by the end-to-end tests' stderr assertions.
 
 | ID | Test name | Input | Expected outcome |
 |---|---|---|---|

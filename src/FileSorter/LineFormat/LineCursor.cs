@@ -44,6 +44,12 @@ internal ref struct LineCursor
     public int CarryOffset => _position;
     public int CarryLength => _block.Length - _position;
 
+    // The content length of an unterminated tail at EOF. A final bare CR is a terminator,
+    // not line content, so a tail of only CR has no content. ChunkReader, RunCursor and
+    // OutputVerifier all finish a stream with this rule; keeping it here stops them drifting.
+    public static int UnterminatedTailLength(ReadOnlySpan<byte> tail) =>
+        tail.Length > 0 && tail[^1] == CarriageReturn ? tail.Length - 1 : tail.Length;
+
     public bool TryReadLine(out int offset, out int length)
     {
         ReadOnlySpan<byte> remaining = _block[_position..];
@@ -54,9 +60,7 @@ internal ref struct LineCursor
             // Allow one trailing CR beyond the content limit while waiting for LF.
             // The completed-line check resolves whether it is content; callers handle EOF.
             // This carry allowance applies even when stripCarriageReturn is false.
-            bool endsInCarriageReturn = remaining.Length > 0 && remaining[^1] == CarriageReturn;
-            int contentLength = endsInCarriageReturn ? remaining.Length - 1 : remaining.Length;
-            if (contentLength > _maxLineLength)
+            if (UnterminatedTailLength(remaining) > _maxLineLength)
             {
                 throw BuildException(remaining);
             }
