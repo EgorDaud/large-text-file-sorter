@@ -6,6 +6,8 @@ Every number the README's "Results" section refers to, measured on one machine, 
 
 **Input.** `TestFileGenerator` at seed 42, average line length 37.64 bytes. The 20 GiB file holds 570,483,043 lines and hashes to `2e91107033e198d4`; the 100 GiB file is described in section 2.
 
+**Benchmark input changed on 2026-10-02.** The in-process benchmarks and `-- --flatness` used to generate their input from a hand-rolled ten-word ASCII vocabulary. They now call `TestFileGenerator`'s own `LineComposer` (seeded, default 0.1 duplicate ratio), so their data has the shipped file's shape. Benchmark and flatness figures recorded before 2026-10-02 used the old vocabulary and are not directly comparable with figures taken after it; they are left as recorded.
+
 ---
 
 ## What reproduces, and what does not
@@ -263,6 +265,8 @@ Rerun on 2026-09-30 with both pipelines (`-- --flatness`, 16 MiB budget, `MergeP
 | 100 MiB | 22.76 MiB | +42.2% | 23.07 MiB | +44.2% |
 
 Spread: 40.8% for Channels and 39.4% for Akka, both within the 60% tolerance. The Akka worker includes `ActorSystem` startup in its sampled window.
+
+Rerun on 2026-10-02, the first on the generator's own input (see the note at the top): 48.3% for Channels and 43.7% for Akka, 100 MiB peaks of 24.55 and 24.35 MiB. Still within the 60% tolerance, but the figures are not directly comparable with the 2026-09-30 rerun above, which used the old ten-word vocabulary; the realistic input changes the allocation pattern, so the spreads differ.
 
 **The climb is GC bookkeeping, not growth in the retained set.** The byte count immediately after `BufferPool` construction — the configured footprint the guarantee describes — is flat at roughly 15 MiB whatever the input size, checked directly. Generation budgets and segment counts grow with the *number* of collections a run triggers, which scales with chunk count at a fixed budget, not with what is retained.
 

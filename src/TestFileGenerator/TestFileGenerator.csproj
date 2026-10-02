@@ -10,6 +10,8 @@
     <InternalsVisibleTo Include="TestFileGenerator.Tests" />
     <!-- The round-trip test needs both copies of the line grammar. -->
     <InternalsVisibleTo Include="FileSorter.Tests" />
+    <!-- Benchmarks drive the real line composer instead of keeping a weaker copy of it. -->
+    <InternalsVisibleTo Include="FileSorter.Benchmarks" />
   </ItemGroup>
 
 </Project>
