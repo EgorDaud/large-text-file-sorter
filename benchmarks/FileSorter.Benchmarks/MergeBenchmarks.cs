@@ -1,6 +1,5 @@
 using BenchmarkDotNet.Attributes;
 using FileSorter.Infrastructure;
-using FileSorter.LineFormat;
 using FileSorter.Merging;
 using FileSorter.Planning;
 using FileSorter.RunGeneration;
@@ -74,10 +73,7 @@ public class MergeBenchmarks
         _cursorBuffers = new RunCursorBuffers[fanIn];
         for (int i = 0; i < fanIn; i++)
         {
-            _cursorBuffers[i] = new RunCursorBuffers(
-                new byte[_plan.ReadAheadBufferSize],
-                new byte[_plan.ReadAheadBufferSize],
-                new LineDescriptor[_plan.ReadAheadDescriptorCapacity]);
+            _cursorBuffers[i] = RunCursorBuffers.Create(_plan);
         }
 
         _outputStagingBuffer = new byte[_plan.OutputBufferSize];

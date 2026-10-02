@@ -1,5 +1,4 @@
 using FileSorter.Infrastructure;
-using FileSorter.LineFormat;
 using FileSorter.Planning;
 
 namespace FileSorter.Merging;
@@ -88,10 +87,7 @@ internal sealed class MergeExecutor
         _cursorBuffers = new RunCursorBuffers[fanIn];
         for (int i = 0; i < fanIn; i++)
         {
-            _cursorBuffers[i] = new RunCursorBuffers(
-                new byte[_plan.ReadAheadBufferSize],
-                new byte[_plan.ReadAheadBufferSize],
-                new LineDescriptor[_plan.ReadAheadDescriptorCapacity]);
+            _cursorBuffers[i] = RunCursorBuffers.Create(_plan);
         }
 
         _cursorBufferSegments = new ArraySegment<RunCursorBuffers>[fanIn];

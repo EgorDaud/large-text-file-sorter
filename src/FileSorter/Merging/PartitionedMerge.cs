@@ -220,10 +220,7 @@ internal sealed class PartitionedMerge
                     runPaths[r], FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: FileStreams.Unbuffered,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
                 inputs.Add(new RunSliceStream(file, start, end));
-                buffers.Add(new RunCursorBuffers(
-                    new byte[_plan.ReadAheadBufferSize],
-                    new byte[_plan.ReadAheadBufferSize],
-                    new LineDescriptor[_plan.ReadAheadDescriptorCapacity]));
+                buffers.Add(RunCursorBuffers.Create(_plan));
                 inputRuns.Add((runPaths[r], start));
             }
 
