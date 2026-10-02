@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace FileSorter.Tests.Properties;
+namespace FileSorter.Tests.Support;
 
 /// <summary>
 /// The byte-identity oracle. It deliberately shares no code with the production

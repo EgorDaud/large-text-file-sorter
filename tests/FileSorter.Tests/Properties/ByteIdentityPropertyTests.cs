@@ -1,5 +1,6 @@
 using CsCheck;
 using FileSorter.Planning;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Properties;

@@ -1,5 +1,4 @@
 using FileSorter.Cli;
-using FileSorter.Tests.Properties;
 using FileSorter.Tests.Support;
 using Xunit;
 using static FileSorter.Tests.Support.TestTimeouts;

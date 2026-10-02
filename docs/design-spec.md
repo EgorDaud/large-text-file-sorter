@@ -933,7 +933,7 @@ Cancellation in the sorter: `ConsoleRun` cancels the token on the first `Console
 | Streaming-layer tier (SL) | `RunGeneration/RunGenerationStrategy`, run twice |
 | Property-based tier (PB) | `tests/FileSorter.Tests/Properties/`, over the types above and `Program.RunAsync` |
 | Integration and end-to-end tiers (IT, ET) | `tests/FileSorter.Tests/Integration/` and `EndToEnd/` |
-| Byte-identity oracle | `tests/FileSorter.Tests/Properties/NaiveReferenceSort`, independently written, must not call `LineOrder` |
+| Byte-identity oracle | `tests/FileSorter.Tests/Support/NaiveReferenceSort`, independently written, must not call `LineOrder` |
 | Verify tests (VF) | `Verification/OutputVerifier.RunAsync`, `VerifyCommand.RunAsync` |
 
 ---

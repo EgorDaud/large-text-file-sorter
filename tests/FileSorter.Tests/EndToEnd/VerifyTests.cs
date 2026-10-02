@@ -7,7 +7,7 @@ using static FileSorter.Tests.Support.TestTimeouts;
 namespace FileSorter.Tests.EndToEnd;
 
 // Drives VerifyCommand.RunAsync directly, the entry point --verify uses, with the same
-// discipline SortRoundTripTests applies to sort mode.
+// discipline the Sort*Tests classes apply to sort mode.
 [Collection("Program")]
 public sealed class VerifyTests : IDisposable
 {

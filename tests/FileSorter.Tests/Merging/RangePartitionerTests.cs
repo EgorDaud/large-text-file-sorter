@@ -2,7 +2,6 @@ using System.Text;
 using CsCheck;
 using FileSorter.LineFormat;
 using FileSorter.Merging;
-using FileSorter.Tests.Properties;
 using FileSorter.Tests.Support;
 using Xunit;
 

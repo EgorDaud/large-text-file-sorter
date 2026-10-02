@@ -1,4 +1,4 @@
-namespace FileSorter.Tests.Properties;
+namespace FileSorter.Tests.Support;
 
 /// <summary>
 /// An independent, non-streaming reading of the line-boundary rules <c>LineCursor</c>
