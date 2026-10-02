@@ -1,5 +1,6 @@
 using FileSorter.Merging;
 using FileSorter.Startup;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Merging;
@@ -12,32 +13,24 @@ namespace FileSorter.Tests.Merging;
 [Collection("Program")]
 public sealed class RunPlacementTests : IDisposable
 {
-    private readonly string _directory =
-        Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
+    private readonly TempDirectory _directory = new();
 
     private readonly TemporaryRunSet _runs;
 
-    public RunPlacementTests()
-    {
-        Directory.CreateDirectory(_directory);
-        _runs = new TemporaryRunSet(_directory);
-    }
+    public RunPlacementTests() => _runs = new TemporaryRunSet(_directory.Path);
 
     public void Dispose()
     {
         _runs.Dispose();
-        if (Directory.Exists(_directory))
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
+        _directory.Dispose();
     }
 
     [Fact]
     [Trait("Case", "KM-12")]
     public void A_successful_move_places_the_run_without_copying_it()
     {
-        string runPath = Path.Combine(_directory, "run.tmp");
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string runPath = Path.Combine(_directory.Path, "run.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
         byte[] bytes = [1, 2, 3, 4, 5];
         File.WriteAllBytes(runPath, bytes);
 
@@ -54,8 +47,8 @@ public sealed class RunPlacementTests : IDisposable
     [Trait("Case", "KM-13")]
     public void A_failed_move_falls_back_to_a_copy_and_the_caller_never_sees_an_error()
     {
-        string runPath = Path.Combine(_directory, "run.tmp");
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string runPath = Path.Combine(_directory.Path, "run.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
         byte[] bytes = [9, 8, 7];
         File.WriteAllBytes(runPath, bytes);
 
@@ -76,8 +69,8 @@ public sealed class RunPlacementTests : IDisposable
         // neither throws nor leaves the destination partial.
         Assert.SkipUnless(OperatingSystem.IsWindows(), "FileShare-based delete denial is a Windows sharing-mode concept.");
 
-        string runPath = Path.Combine(_directory, "run.tmp");
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string runPath = Path.Combine(_directory.Path, "run.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
         byte[] bytes = [1, 2, 3, 4, 5];
         File.WriteAllBytes(runPath, bytes);
 
@@ -108,7 +101,7 @@ public sealed class RunPlacementTests : IDisposable
         Assert.SkipUnless(OperatingSystem.IsWindows(), "A read-only attribute blocks File.Delete only on Windows.");
 
         string runPath = _runs.CreateRunPath();
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
         byte[] bytes = [1, 2, 3, 4, 5];
         File.WriteAllBytes(runPath, bytes);
         string? privateDirectory = Path.GetDirectoryName(runPath);
@@ -145,21 +138,21 @@ public sealed class RunPlacementTests : IDisposable
     [Trait("Case", "KM-19")]
     public void The_copy_fallback_never_leaves_a_staging_file_behind_on_success()
     {
-        string runPath = Path.Combine(_directory, "run.tmp");
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string runPath = Path.Combine(_directory.Path, "run.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
         File.WriteAllBytes(runPath, [1, 2, 3]);
 
         RunPlacement.Place(runPath, outputPath, _runs, (_, _) => false);
 
-        Assert.Empty(Directory.GetFiles(_directory, "*.partial"));
+        Assert.Empty(Directory.GetFiles(_directory.Path, "*.partial"));
     }
 
     [Fact]
     [Trait("Case", "KM-20")]
     public void The_copy_fallback_replaces_an_existing_destination()
     {
-        string runPath = Path.Combine(_directory, "run.tmp");
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string runPath = Path.Combine(_directory.Path, "run.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
         File.WriteAllBytes(outputPath, [0, 0, 0, 0, 0]);
         byte[] newContent = [1, 2, 3];
         File.WriteAllBytes(runPath, newContent);
@@ -179,8 +172,8 @@ public sealed class RunPlacementTests : IDisposable
         // distinguish these cases, so nothing here would fail on Linux the same way.
         Assert.SkipUnless(OperatingSystem.IsWindows(), "FileShare-based write denial is a Windows sharing-mode concept.");
 
-        string runPath = Path.Combine(_directory, "run.tmp");
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string runPath = Path.Combine(_directory.Path, "run.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
         byte[] previousContent = [9, 9, 9, 9];
         File.WriteAllBytes(outputPath, previousContent);
         File.WriteAllBytes(runPath, [1, 2, 3]);
@@ -192,21 +185,21 @@ public sealed class RunPlacementTests : IDisposable
         }
 
         Assert.Equal(previousContent, File.ReadAllBytes(outputPath));
-        Assert.Empty(Directory.GetFiles(_directory, "*.partial"));
+        Assert.Empty(Directory.GetFiles(_directory.Path, "*.partial"));
     }
 
     [Fact]
     [Trait("Case", "KM-14")]
     public void No_temporary_file_survives_placement_by_move_or_by_copy()
     {
-        string movedRun = Path.Combine(_directory, "moved.tmp");
-        string movedOutput = Path.Combine(_directory, "moved-output.tmp");
+        string movedRun = Path.Combine(_directory.Path, "moved.tmp");
+        string movedOutput = Path.Combine(_directory.Path, "moved-output.tmp");
         File.WriteAllBytes(movedRun, [1]);
         RunPlacement.Place(movedRun, movedOutput, _runs);
         Assert.False(File.Exists(movedRun));
 
-        string copiedRun = Path.Combine(_directory, "copied.tmp");
-        string copiedOutput = Path.Combine(_directory, "copied-output.tmp");
+        string copiedRun = Path.Combine(_directory.Path, "copied.tmp");
+        string copiedOutput = Path.Combine(_directory.Path, "copied-output.tmp");
         File.WriteAllBytes(copiedRun, [2]);
         RunPlacement.Place(copiedRun, copiedOutput, _runs, (_, _) => false);
         Assert.False(File.Exists(copiedRun));
@@ -216,17 +209,17 @@ public sealed class RunPlacementTests : IDisposable
     [Trait("Case", "KM-23")]
     public void PlaceEmpty_creates_an_empty_output_or_replaces_an_existing_one_and_leaves_no_staging_file()
     {
-        string created = Path.Combine(_directory, "created.tmp");
+        string created = Path.Combine(_directory.Path, "created.tmp");
         RunPlacement.PlaceEmpty(created);
         Assert.True(File.Exists(created));
         Assert.Empty(File.ReadAllBytes(created));
 
-        string replaced = Path.Combine(_directory, "replaced.tmp");
+        string replaced = Path.Combine(_directory.Path, "replaced.tmp");
         File.WriteAllBytes(replaced, [9, 9, 9]);
         RunPlacement.PlaceEmpty(replaced);
         Assert.Empty(File.ReadAllBytes(replaced));
 
-        Assert.Empty(Directory.GetFiles(_directory, "*.partial"));
+        Assert.Empty(Directory.GetFiles(_directory.Path, "*.partial"));
     }
 
     [Fact]
@@ -236,7 +229,7 @@ public sealed class RunPlacementTests : IDisposable
         // Same Windows-only write denial as KM-21. Program maps this exception to exit 3.
         Assert.SkipUnless(OperatingSystem.IsWindows(), "FileShare-based write denial is a Windows sharing-mode concept.");
 
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
         byte[] previousContent = [9, 9, 9, 9];
         File.WriteAllBytes(outputPath, previousContent);
 
@@ -246,6 +239,6 @@ public sealed class RunPlacementTests : IDisposable
         }
 
         Assert.Equal(previousContent, File.ReadAllBytes(outputPath));
-        Assert.Empty(Directory.GetFiles(_directory, "*.partial"));
+        Assert.Empty(Directory.GetFiles(_directory.Path, "*.partial"));
     }
 }

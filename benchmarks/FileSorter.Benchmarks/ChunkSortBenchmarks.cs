@@ -12,13 +12,12 @@ namespace FileSorter.Benchmarks;
 /// IterationSetup then only copies the already-parsed descriptor array, so what
 /// is measured is the sort alone, not the read or the parse.
 ///
-/// This class understates every change to the sort's key handling, and by how much
-/// is not a constant. SyntheticInput's ten-word vocabulary spans ten distinct top
-/// bytes against the real generator's 48, and its words are short, so a radix that
-/// descends past the first byte finds far less to separate here than it does on a
-/// real chunk. The figure that answers "what did this do to a real sort" is the one
-/// taken on this project's 20 GiB file, in docs/measurements.md; this class is the
-/// repeatable in-process instrument beside it, not a substitute for it.
+/// The input is TestFileGenerator's own output (through SyntheticInput), so the chunk
+/// has the shipped file's 48 distinct top bytes and its string-part and duplicate mix,
+/// and a change to the sort's key handling meets realistic keys here. It is still one
+/// in-process chunk on one machine: the figure that answers "what did this do to a real
+/// sort" is the one taken on this project's 20 GiB file, in docs/measurements.md, and
+/// this class is the repeatable instrument beside it.
 [MemoryDiagnoser]
 // invocationCount: 1, made explicit on every class with an IterationSetup rather
 // than relied on: IterationSetup runs once per iteration, not once per invocation,
@@ -106,6 +105,20 @@ public class ChunkSortBenchmarks
     [IterationSetup]
     public void IterationSetup() => _sourceDescriptors.AsSpan().CopyTo(_workingDescriptors);
 
+    /// The baseline the radix has to beat: the same descriptors, the same buffer and the
+    /// same LineOrder.Compare (cached prefix first, string bytes on a tie), through the
+    /// BCL introsort alone with no bucketing pass in front of it. A struct comparer, as
+    /// in ChunkSorter, so the call is devirtualised in both rows and neither pays for an
+    /// interface dispatch the other avoids.
+    [Benchmark(Baseline = true)]
+    public void PlainIntrosort() =>
+        _workingDescriptors.AsSpan(0, _lineCount).Sort(new DescriptorComparer(_buffer));
+
     [Benchmark]
     public void Sort() => ChunkSorter.Sort(_workingDescriptors.AsSpan(0, _lineCount), _buffer);
+
+    private readonly struct DescriptorComparer(byte[] buffer) : IComparer<LineDescriptor>
+    {
+        public int Compare(LineDescriptor x, LineDescriptor y) => LineOrder.Compare(in x, buffer, in y, buffer);
+    }
 }

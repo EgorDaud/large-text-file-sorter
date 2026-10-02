@@ -1,16 +1,11 @@
 using FileSorter.RunGeneration;
 using Xunit;
+using static FileSorter.Tests.Support.TestTimeouts;
 
 namespace FileSorter.Tests.RunGeneration;
 
 public sealed class BufferPoolTests
 {
-    // An upper bound for a saturated thread pool, not an expected duration: the release
-    // and the pending acquisition's continuation are both in-process with no I/O on the
-    // path, so a healthy run resolves in microseconds and the bound only has to be
-    // generous enough that a starved continuation is not read as a broken pool.
-    private static readonly TimeSpan BoundedWait = TimeSpan.FromSeconds(30);
-
     [Fact]
     [Trait("Case", "BP-01")]
     public async Task Acquiring_and_releasing_round_trips_a_usable_buffer()

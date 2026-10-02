@@ -3,6 +3,7 @@ using CsCheck;
 using FileSorter.LineFormat;
 using FileSorter.Merging;
 using FileSorter.Startup;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Merging;
@@ -32,18 +33,9 @@ public sealed class RunSliceStreamTests : IDisposable
     // Exactly four lines, and above RunCursor's own floor (maxLineLength + 2 = 10).
     private const int WindowSize = 4 * LineWidth;
 
-    private readonly string _directory =
-        Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
+    private readonly TempDirectory _directory = new();
 
-    public RunSliceStreamTests() => Directory.CreateDirectory(_directory);
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_directory))
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-    }
+    public void Dispose() => _directory.Dispose();
 
     [Fact]
     [Trait("Case", "RC-01")]
@@ -147,7 +139,7 @@ public sealed class RunSliceStreamTests : IDisposable
     private async Task AssertSliceAsync(
         int lineCount, int firstLine, int lineCountInSlice, int descriptorCapacity, int windowSize = WindowSize)
     {
-        string path = Path.Combine(_directory, $"run-{Guid.NewGuid():N}.tmp");
+        string path = Path.Combine(_directory.Path, $"run-{Guid.NewGuid():N}.tmp");
         string[] lines = [.. Enumerable.Range(0, lineCount).Select(i => $"{i:D2}. {(char)('a' + (i % 26))}{i % 10:D2}")];
         StringBuilder content = new();
         foreach (string line in lines)

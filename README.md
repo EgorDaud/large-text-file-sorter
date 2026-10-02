@@ -195,7 +195,7 @@ Every correctness-bearing decision sits behind a plain, dependency-free seam, so
 
 **Benchmarks** never run under `dotnet test`: `dotnet run -c Release --project benchmarks/FileSorter.Benchmarks`, with `--flatness` and `--flatness-parallel-merge` measuring the memory guarantee end to end.
 
-**The build gate.** `Directory.Build.props` asks for `AnalysisMode=Recommended` and `EnforceCodeStyleInBuild`, and `TreatWarningsAsErrors` turns both the quality rules and the `.editorconfig` style rules into build failures — so `dotnet build -c Release` is the whole check, with no separate lint command to drift out of sync. CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs it and the tests on Linux and Windows, because a program about file paths, byte offsets and terminators should be shown to work on both.
+**The build gate.** `Directory.Build.props` asks for `AnalysisMode=Recommended` and `EnforceCodeStyleInBuild`, and `TreatWarningsAsErrors` turns both the quality rules and the `.editorconfig` style rules into build failures — so `dotnet build -c Release` is the whole check, with no separate lint command to drift out of sync. CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs it and the tests in Release on Linux and Windows (plus a Debug test leg on Linux, so the `Debug.Assert` invariants run), because a program about file paths, byte offsets and terminators should be shown to work on both.
 
 ---
 

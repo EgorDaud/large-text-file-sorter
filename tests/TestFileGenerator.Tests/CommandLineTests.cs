@@ -40,26 +40,26 @@ public sealed class CommandLineTests
     }
 
     [Theory]
-    [InlineData("out.txt")]                                        // no size
-    [InlineData("--size", "1MiB")]                                 // no output path
-    [InlineData("out.txt", "--size")]                              // value missing
-    [InlineData("out.txt", "--size", "1EiB")]                      // unknown unit
-    [InlineData("out.txt", "--size", "-1")]                        // negative
-    [InlineData("out.txt", "--size", "9223372036854775807KiB")]    // overflows a signed 64-bit count
-    [InlineData("", "--size", "1MiB")]                             // empty output path
-    [InlineData("out.txt", "--size", "1MiB", "--duplicate-ratio", "1.5")]
-    [InlineData("out.txt", "--size", "1MiB", "--duplicate-ratio", "NaN")]
-    [InlineData("out.txt", "--size", "1MiB", "--duplicate-ratio", "Infinity")]
-    [InlineData("out.txt", "--size", "1MiB", "--seed", "many")]
-    [InlineData("out.txt", "--size", "1MiB", "--max-line", "1KiB")] // a knob the generator does not have
-    [InlineData("out.txt", "--size", "1MiB", "--colour", "blue")]  // unknown option
-    [InlineData("out.txt", "--size", "1MiB", "other.txt")]         // a second output path
-    public void Parsing_when_an_argument_is_unusable_explains_which_one(params string[] args)
+    [InlineData("--size is required", "out.txt")]                                  // no size
+    [InlineData("An output path is required", "--size", "1MiB")]                   // no output path
+    [InlineData("--size expects a value", "out.txt", "--size")]                    // value missing
+    [InlineData("--size expects a byte count", "out.txt", "--size", "1EiB")]       // unknown unit
+    [InlineData("--size expects a byte count", "out.txt", "--size", "-1")]         // negative
+    [InlineData("--size expects a byte count", "out.txt", "--size", "9223372036854775807KiB")] // overflows a signed 64-bit count
+    [InlineData("An output path is required", "", "--size", "1MiB")]               // empty output path
+    [InlineData("--duplicate-ratio expects a value between 0 and 1", "out.txt", "--size", "1MiB", "--duplicate-ratio", "1.5")]
+    [InlineData("--duplicate-ratio expects a value between 0 and 1", "out.txt", "--size", "1MiB", "--duplicate-ratio", "NaN")]
+    [InlineData("--duplicate-ratio expects a value between 0 and 1", "out.txt", "--size", "1MiB", "--duplicate-ratio", "Infinity")]
+    [InlineData("--seed expects an integer", "out.txt", "--size", "1MiB", "--seed", "many")]
+    [InlineData("Unknown option '--max-line'", "out.txt", "--size", "1MiB", "--max-line", "1KiB")] // a knob the generator does not have
+    [InlineData("Unknown option '--colour'", "out.txt", "--size", "1MiB", "--colour", "blue")]
+    [InlineData("Unexpected argument 'other.txt'", "out.txt", "--size", "1MiB", "other.txt")] // a second output path
+    public void Parsing_when_an_argument_is_unusable_explains_which_one(string expectedMessage, params string[] args)
     {
         Assert.False(Program.TryParseOptions(args, out GeneratorOptions? options, out string? error));
 
         Assert.Null(options);
         Assert.NotNull(error);
-        Assert.NotEmpty(error);
+        Assert.Contains(expectedMessage, error);
     }
 }

@@ -1,6 +1,7 @@
 using FileSorter.LineFormat;
 using FileSorter.Merging;
 using FileSorter.Startup;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Merging;
@@ -12,16 +13,9 @@ namespace FileSorter.Tests.Merging;
 [Collection("Program")]
 public sealed class MergeExecutorTests : IDisposable
 {
-    private readonly string _directory =
-        Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
+    private readonly TempDirectory _directory = new();
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_directory))
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-    }
+    public void Dispose() => _directory.Dispose();
 
     [Fact]
     [Trait("Case", "MP-10")]
@@ -35,7 +29,7 @@ public sealed class MergeExecutorTests : IDisposable
         int predictedPasses = MergePlanner.Plan(runCount, fanIn).Count;
         Assert.True(predictedPasses >= 3);
 
-        using TemporaryRunSet runs = new(_directory);
+        using TemporaryRunSet runs = new(_directory.Path);
         List<string> runPaths = [];
         for (int i = 0; i < runCount; i++)
         {
@@ -62,7 +56,7 @@ public sealed class MergeExecutorTests : IDisposable
         long expectedLength = runPaths.Sum(path => new FileInfo(path).Length);
 
         MergeExecutor executor = new(runs, plan, maxLineLength: 63);
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
 
         await executor.ExecuteAsync(runPaths, outputPath, TestContext.Current.CancellationToken);
 
@@ -79,7 +73,7 @@ public sealed class MergeExecutorTests : IDisposable
 
         // Per-group deletion is what this asserts indirectly: nothing survives in
         // the temp directory except the final output itself.
-        Assert.Equal([outputPath], Directory.GetFiles(_directory));
+        Assert.Equal([outputPath], Directory.GetFiles(_directory.Path));
     }
 
     [Fact]
@@ -98,7 +92,7 @@ public sealed class MergeExecutorTests : IDisposable
         const int fanIn = 3;
         Assert.True(MergePlanner.Plan(runCount, fanIn).Count >= 2);
 
-        TemporaryRunSet runs = new(_directory);
+        TemporaryRunSet runs = new(_directory.Path);
         List<string> runPaths = [];
         for (int i = 0; i < runCount; i++)
         {
@@ -112,7 +106,7 @@ public sealed class MergeExecutorTests : IDisposable
         Assert.NotNull(privateDirectory);
 
         MergeExecutor executor = new(runs, PlanWith(fanIn, mergeParallelism: 1), maxLineLength: 63);
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
 
         TextWriter originalError = Console.Error;
         StringWriter capturedError = new();
@@ -143,7 +137,7 @@ public sealed class MergeExecutorTests : IDisposable
         runs.Dispose();
         Assert.False(File.Exists(lockedRun));
         Assert.False(Directory.Exists(privateDirectory));
-        Assert.Equal([outputPath], Directory.GetFiles(_directory));
+        Assert.Equal([outputPath], Directory.GetFiles(_directory.Path));
     }
 
     [Fact]
@@ -155,7 +149,7 @@ public sealed class MergeExecutorTests : IDisposable
         // to outputPath, with no exception and nothing to say the caller's contract was
         // violated. Program never reaches this method with fewer than two runPaths, so
         // this states the contract in code for any other caller.
-        using TemporaryRunSet runs = new(_directory);
+        using TemporaryRunSet runs = new(_directory.Path);
         string runPath = runs.CreateRunPath();
         File.WriteAllText(runPath, "1. Apple\n");
 
@@ -171,7 +165,7 @@ public sealed class MergeExecutorTests : IDisposable
             MergeParallelism: 1);
 
         MergeExecutor executor = new(runs, plan, maxLineLength: 63);
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
 
         ArgumentException ex = await Assert.ThrowsAsync<ArgumentException>(
             () => executor.ExecuteAsync([runPath], outputPath, TestContext.Current.CancellationToken));
@@ -192,7 +186,7 @@ public sealed class MergeExecutorTests : IDisposable
         // rather than an extra line -- one raw byte the merge never writes back out,
         // which is exactly the disagreement the position check at the end of
         // MergeGroupAsync exists to catch.
-        using TemporaryRunSet runs = new(_directory);
+        using TemporaryRunSet runs = new(_directory.Path);
         string runA = runs.CreateRunPath();
         string runB = runs.CreateRunPath();
         File.WriteAllText(runA, "1. Apple\n3. Cherry\n\r");
@@ -211,7 +205,7 @@ public sealed class MergeExecutorTests : IDisposable
             MergeParallelism: 1);
 
         MergeExecutor executor = new(runs, plan, maxLineLength: 63);
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => executor.ExecuteAsync(runPaths, outputPath, TestContext.Current.CancellationToken));
@@ -245,7 +239,7 @@ public sealed class MergeExecutorTests : IDisposable
         const int fanIn = 3;
         Assert.Equal(2, MergePlanner.Plan(runCount, fanIn).Count);
 
-        using TemporaryRunSet runs = new(_directory);
+        using TemporaryRunSet runs = new(_directory.Path);
         List<string> runPaths = [];
         for (int i = 0; i < runCount; i++)
         {
@@ -266,7 +260,7 @@ public sealed class MergeExecutorTests : IDisposable
             MergeParallelism: 1);
 
         MergeExecutor executor = new(runs, plan, maxLineLength: 63);
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
         byte[] preExisting = "a complete, correct output from an earlier run\n"u8.ToArray();
         File.WriteAllBytes(outputPath, preExisting);
 
@@ -289,7 +283,7 @@ public sealed class MergeExecutorTests : IDisposable
         const int fanIn = 3;
         Assert.True(MergePlanner.Plan(runCount, fanIn).Count >= 3);
 
-        using TemporaryRunSet runs = new(_directory);
+        using TemporaryRunSet runs = new(_directory.Path);
         List<string> runPaths = [];
         for (int i = 0; i < runCount; i++)
         {
@@ -299,7 +293,7 @@ public sealed class MergeExecutorTests : IDisposable
         }
 
         MergeExecutor executor = new(runs, PlanWith(fanIn, mergeParallelism: 4), maxLineLength: 63);
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
         await executor.ExecuteAsync(runPaths, outputPath, TestContext.Current.CancellationToken);
 
         Assert.Null(executor.Partition);   // the partitioner never ran
@@ -328,7 +322,7 @@ public sealed class MergeExecutorTests : IDisposable
         // sampling treats the byte right after a real '\n' as a candidate line start
         // regardless of what follows, so it would try to parse the orphan '\r' as a line
         // and throw MalformedLineException before the merge ever ran.
-        using TemporaryRunSet runs = new(_directory);
+        using TemporaryRunSet runs = new(_directory.Path);
         List<string> runPaths = [];
         for (int i = 0; i < 4; i++)
         {
@@ -338,7 +332,7 @@ public sealed class MergeExecutorTests : IDisposable
         }
 
         MergeExecutor executor = new(runs, PlanWith(fanIn: 8, mergeParallelism: 3), maxLineLength: 63);
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
 
         InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => executor.ExecuteAsync(runPaths, outputPath, TestContext.Current.CancellationToken));
@@ -391,7 +385,7 @@ public sealed class MergeExecutorTests : IDisposable
         // completion -- real work, not a fast no-op -- and are then cancelled by worker 2's
         // failure while still awaiting their own I/O, which is exactly the sibling
         // OperationCanceledException PartitionedMerge.RootCause has to look past.
-        using TemporaryRunSet runs = new(_directory);
+        using TemporaryRunSet runs = new(_directory.Path);
         // Every line across all three runs below is exactly 20 bytes, "\n" included.
         string runA = WriteFixedWidthRun(runs, "aaa", count: 70_002);
         string runB = WriteRunBWithOneMalformedLine(runs, malformedIndex: 15);
@@ -407,7 +401,7 @@ public sealed class MergeExecutorTests : IDisposable
             ReadAheadDescriptorCapacity = 256,
         };
         MergeExecutor executor = new(runs, plan, maxLineLength: 63);
-        string outputPath = Path.Combine(_directory, "output.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
 
         // Catching this exact type rather than OperationCanceledException or an
         // AggregateException is what confirms PartitionedMerge.RootCause picked the real
@@ -463,8 +457,8 @@ public sealed class MergeExecutorTests : IDisposable
             perRun[i % runCount].Add($"{i:D8}. run{i % runCount}\n");
         }
 
-        string sequentialDirectory = Path.Combine(_directory, "sequential");
-        string partitionedDirectory = Path.Combine(_directory, "partitioned");
+        string sequentialDirectory = Path.Combine(_directory.Path, "sequential");
+        string partitionedDirectory = Path.Combine(_directory.Path, "partitioned");
 
         using TemporaryRunSet sequentialRuns = new(sequentialDirectory);
         using TemporaryRunSet partitionedRuns = new(partitionedDirectory);
@@ -550,7 +544,7 @@ public sealed class MergeExecutorTests : IDisposable
     private async Task<(byte[] Output, PartitionStats? Stats)> MergeAtAsync(
         List<string>[] perRun, int mergeParallelism, string name)
     {
-        string directory = Path.Combine(_directory, name);
+        string directory = Path.Combine(_directory.Path, name);
         using TemporaryRunSet runs = new(directory);
         MergeExecutor executor = new(runs, PlanWith(fanIn: 128, mergeParallelism), maxLineLength: 63);
         string outputPath = Path.Combine(directory, "output.tmp");

@@ -3,9 +3,11 @@ using System.Text;
 using FileSorter.LineFormat;
 using FileSorter.Merging;
 using FileSorter.Startup;
+using FileSorter.Tests.Support;
 using FileSorter.Verification;
 using TestFileGenerator.Generation;
 using Xunit;
+using static FileSorter.Tests.Support.TestTimeouts;
 
 namespace FileSorter.Tests.EndToEnd;
 
@@ -16,30 +18,16 @@ namespace FileSorter.Tests.EndToEnd;
 [Collection("Program")]
 public sealed class SortRoundTripTests : IDisposable
 {
-    private static readonly TimeSpan BoundedWait = TimeSpan.FromSeconds(30);
+    private readonly TempDirectory _directory = new();
 
-    private readonly string _directory =
-        Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
-
-    public SortRoundTripTests()
-    {
-        Directory.CreateDirectory(_directory);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_directory))
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-    }
+    public void Dispose() => _directory.Dispose();
 
     [Fact]
     public async Task Sorting_an_empty_input_produces_an_empty_output_and_no_leftover_temp_files()
     {
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         File.WriteAllBytes(inputPath, []);
 
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
@@ -62,9 +50,9 @@ public sealed class SortRoundTripTests : IDisposable
         // unhandled exception instead of a documented exit code; RunAsync clamps the
         // assumption to maxLineLength to prevent it. MaxLineLength 20 stays below the
         // constant with room to spare.
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         File.WriteAllText(inputPath, "1. Apple\n2. Banana\n3. Cherry\n");
 
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, MaxLineLength: 20, 2, Pipeline.Channels);
@@ -81,9 +69,9 @@ public sealed class SortRoundTripTests : IDisposable
         // A missing output directory must be caught before phase one starts: left to
         // the eventual open, it surfaces as a DirectoryNotFoundException only after
         // every run file has been produced. Exit 3 is the "invalid arguments" row.
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "no-such-directory", "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "no-such-directory", "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         File.WriteAllText(inputPath, "1. Apple\n2. Banana\n");
 
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
@@ -102,9 +90,9 @@ public sealed class SortRoundTripTests : IDisposable
         // Directory.CreateDirectory cannot create a directory there, and the resulting
         // IOException from inside TemporaryRunSet's constructor has to map to exit 3
         // rather than escape unhandled.
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp-is-actually-a-file");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp-is-actually-a-file");
         File.WriteAllText(inputPath, "1. Apple\n2. Banana\n");
         File.WriteAllText(tempDirectory, "not a directory");
 
@@ -124,9 +112,9 @@ public sealed class SortRoundTripTests : IDisposable
     [InlineData(false)]
     public async Task Sorting_a_small_input_that_fits_in_one_run_leaves_no_temp_file_behind(bool useAkka)
     {
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
 
         // A handful of lines is nowhere near ChunkSize at this budget, so ChunkReader
         // emits exactly one chunk, phase one emits exactly one run, and phase two takes
@@ -148,9 +136,9 @@ public sealed class SortRoundTripTests : IDisposable
     [InlineData(false)]
     public async Task Sorting_forces_a_multi_pass_merge_when_the_memory_budget_is_small(bool useAkka)
     {
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
 
         // The budget has to clear two fixed costs before it buys a single chunk byte:
         // phase two's 1 MiB output buffer, and one 64 KiB spill buffer per phase-one
@@ -182,19 +170,19 @@ public sealed class SortRoundTripTests : IDisposable
     [Fact]
     public async Task Both_pipelines_produce_byte_identical_output_for_a_multi_pass_run()
     {
-        string inputPath = Path.Combine(_directory, "in.txt");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
         WriteGeneratedInput(inputPath, targetBytes: 512 * 1024, seed: 13);
 
-        string akkaOutput = Path.Combine(_directory, "akka-out.txt");
-        string channelsOutput = Path.Combine(_directory, "channels-out.txt");
+        string akkaOutput = Path.Combine(_directory.Path, "akka-out.txt");
+        string channelsOutput = Path.Combine(_directory.Path, "channels-out.txt");
 
         // 1,051,664 is the same budget the multi-pass test above derives longhand: just
         // clear of this triple's MinimumViableBudget of 1,050,120. This test needs only
         // a small, multi-pass-forcing budget, not a specific fan-in.
         SorterOptions akkaOptions = new(
-            inputPath, akkaOutput, Path.Combine(_directory, "akka-temp"), 1_051_664, 256, 2, Pipeline.Akka);
+            inputPath, akkaOutput, Path.Combine(_directory.Path, "akka-temp"), 1_051_664, 256, 2, Pipeline.Akka);
         SorterOptions channelsOptions = new(
-            inputPath, channelsOutput, Path.Combine(_directory, "channels-temp"), 1_051_664, 256, 2, Pipeline.Channels);
+            inputPath, channelsOutput, Path.Combine(_directory.Path, "channels-temp"), 1_051_664, 256, 2, Pipeline.Channels);
 
         int akkaExit = await Program.RunAsync(akkaOptions, TestContext.Current.CancellationToken)
             .WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
@@ -212,9 +200,9 @@ public sealed class SortRoundTripTests : IDisposable
         // This exercises the CancellationToken plumbing through RunAsync, not the
         // exit-130 mapping: that mapping lives in ConsoleRun (CR-04), and no OS-level
         // Ctrl+C can be delivered to a process from inside a unit test.
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         WriteGeneratedInput(inputPath, targetBytes: 256 * 1024, seed: 3);
 
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
@@ -240,7 +228,7 @@ public sealed class SortRoundTripTests : IDisposable
         // content exactly the limit, so the minimum viable budget's small chunk puts
         // the boundary on some line's CR across the twelve lines below either way.
         const int maxLineLength = 8;
-        string inputPath = Path.Combine(_directory, "in.txt");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
 
         // Descending, so the sort is not already a no-op; string part fixed ("abcd")
         // so LineOrder's tie-break falls to the number, giving one unambiguous
@@ -256,8 +244,8 @@ public sealed class SortRoundTripTests : IDisposable
         byte[]? previousOutput = null;
         foreach (long budget in new[] { minimumBudget, minimumBudget + 97 })
         {
-            string outputPath = Path.Combine(_directory, $"out-{budget}.txt");
-            string tempDirectory = Path.Combine(_directory, $"temp-{budget}");
+            string outputPath = Path.Combine(_directory.Path, $"out-{budget}.txt");
+            string tempDirectory = Path.Combine(_directory.Path, $"temp-{budget}");
             SorterOptions options = new(inputPath, outputPath, tempDirectory, budget, maxLineLength, Parallelism: 1, Pipeline.Channels);
 
             int exitCode = await Program.RunAsync(options, TestContext.Current.CancellationToken)
@@ -281,9 +269,9 @@ public sealed class SortRoundTripTests : IDisposable
         // makes the output's own reader -- and --verify -- disagree with what the
         // sorter just wrote, so a correct sort reports a hash mismatch against its own
         // input.
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         File.WriteAllText(inputPath, "2. Banana\n1. Apple\r");
 
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
@@ -327,7 +315,7 @@ public sealed class SortRoundTripTests : IDisposable
             partitionedBudget, partitionedParallelism, maxLineLength, assumedMeanLineLength: 32);
         Assert.Equal(3, partitionedPlan.MergeParallelism);
 
-        string inputPath = Path.Combine(_directory, "in.txt");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
         StringBuilder text = new();
         for (int i = 0; i < 300; i++)
         {
@@ -348,8 +336,8 @@ public sealed class SortRoundTripTests : IDisposable
 
     private async Task<byte[]> SortAsync(string inputPath, string name, long budget, int maxLineLength, int parallelism)
     {
-        string outputPath = Path.Combine(_directory, $"out-{name}.txt");
-        string tempDirectory = Path.Combine(_directory, $"temp-{name}");
+        string outputPath = Path.Combine(_directory.Path, $"out-{name}.txt");
+        string tempDirectory = Path.Combine(_directory.Path, $"temp-{name}");
         SorterOptions options = new(inputPath, outputPath, tempDirectory, budget, maxLineLength, parallelism, Pipeline.Channels);
 
         int exitCode = await Program.RunAsync(options, TestContext.Current.CancellationToken)
@@ -384,7 +372,7 @@ public sealed class SortRoundTripTests : IDisposable
         // that quietly changes a shape fails here rather than passing while testing
         // nothing.
         const int maxLineLength = 64;
-        string inputPath = Path.Combine(_directory, "in.txt");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
 
         byte[] input = Encoding.ASCII.GetBytes(BuildCrContentLines(60));
         File.WriteAllBytes(inputPath, input);
@@ -430,7 +418,7 @@ public sealed class SortRoundTripTests : IDisposable
         Assert.Equal(2, multiPassPlan.MergeFanIn); // MinMergeFanIn -- the whole point of using the bare minimum
         Assert.Equal(60_531, multiPassPlan.ChunkSize);
 
-        string multiPassInputPath = Path.Combine(_directory, "in-multipass.txt");
+        string multiPassInputPath = Path.Combine(_directory.Path, "in-multipass.txt");
         byte[] multiPassInput = Encoding.ASCII.GetBytes(BuildCrContentLines(30_000));
         File.WriteAllBytes(multiPassInputPath, multiPassInput);
         byte[] multiPassExpected = FileSorter.Tests.Properties.NaiveReferenceSort.Sort(multiPassInput);
@@ -477,7 +465,7 @@ public sealed class SortRoundTripTests : IDisposable
                      ("multi-pass", multiPassInputPath), ("partitioned", inputPath),
                  })
         {
-            string outputPath = Path.Combine(_directory, $"out-{name}.txt");
+            string outputPath = Path.Combine(_directory.Path, $"out-{name}.txt");
             VerifyOptions verifyOptions = new(path, outputPath, MaxLineLength: maxLineLength);
             int verifyExitCode = await VerifyCommand.RunAsync(verifyOptions, TestContext.Current.CancellationToken)
                 .WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
@@ -520,8 +508,8 @@ public sealed class SortRoundTripTests : IDisposable
     private async Task<(byte[] Output, string Stderr)> SortCapturedAsync(
         string inputPath, string name, long budget, int maxLineLength, int parallelism)
     {
-        string outputPath = Path.Combine(_directory, $"out-{name}.txt");
-        string tempDirectory = Path.Combine(_directory, $"temp-{name}");
+        string outputPath = Path.Combine(_directory.Path, $"out-{name}.txt");
+        string tempDirectory = Path.Combine(_directory.Path, $"temp-{name}");
         SorterOptions options = new(inputPath, outputPath, tempDirectory, budget, maxLineLength, parallelism, Pipeline.Channels);
 
         TextWriter originalError = Console.Error;
@@ -591,7 +579,7 @@ public sealed class SortRoundTripTests : IDisposable
         // OUTPUT back in as a fresh sort's input hits the ordinary terminated-line
         // branch, which strips the '\r' before the '\n' as it would for any other
         // '\r\n' line, so the second sort's output is "1. a\n", one byte shorter.
-        string firstInputPath = Path.Combine(_directory, "in1.txt");
+        string firstInputPath = Path.Combine(_directory.Path, "in1.txt");
 
         File.WriteAllText(firstInputPath, "1. a\r\r\n");
 
@@ -600,7 +588,7 @@ public sealed class SortRoundTripTests : IDisposable
 
         // The first sort's output file (out-first.txt, per SortAsync's naming) is this
         // second call's input.
-        string firstOutputPath = Path.Combine(_directory, "out-first.txt");
+        string firstOutputPath = Path.Combine(_directory.Path, "out-first.txt");
         byte[] secondOutput = await SortAsync(firstOutputPath, "second", 2L << 20, maxLineLength: 1024, parallelism: 2);
         Assert.Equal("1. a\n"u8.ToArray(), secondOutput);
 
@@ -616,9 +604,9 @@ public sealed class SortRoundTripTests : IDisposable
     [Fact]
     public async Task Sorting_a_malformed_line_surfaces_MalformedLineException_naming_the_offending_line()
     {
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
 
         // Line 2 has no '.', so LineParser.TryParse rejects it: the only grammar
         // violation that does not depend on maxLineLength.
@@ -710,10 +698,10 @@ public sealed class SortRoundTripTests : IDisposable
         // Run files must never share a namespace with anything a user could plausibly
         // have sitting next to the output, including a name matching the run-file
         // pattern this codebase's own runs take.
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = _directory;
-        string sentinelPath = Path.Combine(_directory, "run-00000001.tmp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = _directory.Path;
+        string sentinelPath = Path.Combine(_directory.Path, "run-00000001.tmp");
         byte[] sentinelContent = "not a run file"u8.ToArray();
         File.WriteAllBytes(sentinelPath, sentinelContent);
         File.WriteAllText(inputPath, "2. Banana\n1. Apple\n");
@@ -731,9 +719,9 @@ public sealed class SortRoundTripTests : IDisposable
     [Trait("Case", "ET-07")]
     public async Task An_output_named_like_a_run_file_is_produced_correctly()
     {
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "run-00000001.tmp");
-        string tempDirectory = _directory;
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "run-00000001.tmp");
+        string tempDirectory = _directory.Path;
         File.WriteAllText(inputPath, "2. Banana\n1. Apple\n");
 
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
@@ -749,14 +737,14 @@ public sealed class SortRoundTripTests : IDisposable
     [Trait("Case", "ET-08")]
     public async Task Two_concurrent_sorts_sharing_one_temp_parent_do_not_disturb_each_other()
     {
-        string tempDirectory = Path.Combine(_directory, "shared-temp");
+        string tempDirectory = Path.Combine(_directory.Path, "shared-temp");
 
-        string firstInput = Path.Combine(_directory, "in1.txt");
-        string firstOutput = Path.Combine(_directory, "out1.txt");
+        string firstInput = Path.Combine(_directory.Path, "in1.txt");
+        string firstOutput = Path.Combine(_directory.Path, "out1.txt");
         File.WriteAllText(firstInput, "2. Banana\n1. Apple\n");
 
-        string secondInput = Path.Combine(_directory, "in2.txt");
-        string secondOutput = Path.Combine(_directory, "out2.txt");
+        string secondInput = Path.Combine(_directory.Path, "in2.txt");
+        string secondOutput = Path.Combine(_directory.Path, "out2.txt");
         File.WriteAllText(secondInput, "30. Cherry\n4. Date\n");
 
         SorterOptions firstOptions = new(firstInput, firstOutput, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
@@ -797,9 +785,9 @@ public sealed class SortRoundTripTests : IDisposable
         MemoryPlan plan = MemoryBudget.Calculate(budget, parallelism, maxLineLength, assumedMeanLineLength: 32);
         Assert.Equal(2, plan.MergeFanIn); // MinMergeFanIn -- the whole point of using the bare minimum
 
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         WriteGeneratedInput(inputPath, targetBytes: 256 * 1024, seed: 5);
 
         SorterOptions options = new(inputPath, outputPath, tempDirectory, budget, maxLineLength, parallelism, Pipeline.Channels);
@@ -825,9 +813,9 @@ public sealed class SortRoundTripTests : IDisposable
         // files at the moment of failure, not merely an empty directory nobody wrote
         // into. TemporaryRunSet's cleanup runs from RunAsync's `using` declaration
         // regardless of how phase one exits.
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         File.WriteAllText(inputPath, "1. Apple\nno separator here\n3. Banana\n");
 
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
@@ -855,9 +843,9 @@ public sealed class SortRoundTripTests : IDisposable
         // crashing with a stack trace.
         Assert.SkipUnless(OperatingSystem.IsWindows(), "A read-only attribute blocks File.Move's replace only on Windows.");
 
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         File.WriteAllBytes(inputPath, []);
         byte[] previousContent = "previous output, not this run's"u8.ToArray();
         File.WriteAllBytes(outputPath, previousContent);
@@ -871,7 +859,7 @@ public sealed class SortRoundTripTests : IDisposable
             Assert.Equal(3, exitCode);
             Assert.Contains(outputPath, stderr, StringComparison.Ordinal);
             Assert.Equal(previousContent, File.ReadAllBytes(outputPath));
-            Assert.Empty(Directory.GetFiles(_directory, "*.partial"));
+            Assert.Empty(Directory.GetFiles(_directory.Path, "*.partial"));
         }
         finally
         {
@@ -890,9 +878,9 @@ public sealed class SortRoundTripTests : IDisposable
         // the reason given in the empty-input case above.
         Assert.SkipUnless(OperatingSystem.IsWindows(), "A read-only attribute blocks File.Move's replace only on Windows.");
 
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         File.WriteAllText(inputPath, "1. Apple\n");
         byte[] previousContent = "previous output, not this run's"u8.ToArray();
         File.WriteAllBytes(outputPath, previousContent);
@@ -906,7 +894,7 @@ public sealed class SortRoundTripTests : IDisposable
             Assert.Equal(3, exitCode);
             Assert.Contains(outputPath, stderr, StringComparison.Ordinal);
             Assert.Equal(previousContent, File.ReadAllBytes(outputPath));
-            Assert.Empty(Directory.GetFiles(_directory, "*.partial"));
+            Assert.Empty(Directory.GetFiles(_directory.Path, "*.partial"));
         }
         finally
         {
@@ -918,9 +906,9 @@ public sealed class SortRoundTripTests : IDisposable
     [Trait("Case", "ET-13")]
     public async Task A_successful_single_run_sort_still_replaces_an_existing_destination()
     {
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         File.WriteAllText(inputPath, "2. Banana\n1. Apple\n");
         File.WriteAllText(outputPath, "stale content from an earlier run\n");
 
@@ -930,7 +918,7 @@ public sealed class SortRoundTripTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Equal("1. Apple\n2. Banana\n", File.ReadAllText(outputPath));
-        Assert.Empty(Directory.GetFiles(_directory, "*.partial"));
+        Assert.Empty(Directory.GetFiles(_directory.Path, "*.partial"));
     }
 
     [Fact]
@@ -941,9 +929,9 @@ public sealed class SortRoundTripTests : IDisposable
         // destination that is itself a directory. Portable, unlike ET-11: a rename
         // over an existing directory fails everywhere, not only under Windows sharing
         // rules.
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         File.WriteAllBytes(inputPath, []);
         Directory.CreateDirectory(outputPath);
 
@@ -953,16 +941,16 @@ public sealed class SortRoundTripTests : IDisposable
         Assert.Equal(3, exitCode);
         Assert.Contains(outputPath, stderr, StringComparison.Ordinal);
         Assert.True(Directory.Exists(outputPath));
-        Assert.Empty(Directory.GetFiles(_directory, "*.partial"));
+        Assert.Empty(Directory.GetFiles(_directory.Path, "*.partial"));
     }
 
     [Fact]
     [Trait("Case", "ET-15")]
     public async Task A_single_run_sort_reports_a_destination_that_is_a_directory_by_name_and_exits_3()
     {
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         File.WriteAllText(inputPath, "1. Apple\n");
         Directory.CreateDirectory(outputPath);
 
@@ -972,7 +960,7 @@ public sealed class SortRoundTripTests : IDisposable
         Assert.Equal(3, exitCode);
         Assert.Contains(outputPath, stderr, StringComparison.Ordinal);
         Assert.True(Directory.Exists(outputPath));
-        Assert.Empty(Directory.GetFiles(_directory, "*.partial"));
+        Assert.Empty(Directory.GetFiles(_directory.Path, "*.partial"));
     }
 
     [Fact]
@@ -983,9 +971,9 @@ public sealed class SortRoundTripTests : IDisposable
         // and an existing directory there makes that open fail on every platform. The
         // empty and single-run shapes stage and move instead, so they report exit 3
         // (ET-14, ET-15); only the merge is a genuine I/O failure after validation.
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         WriteGeneratedInput(inputPath, targetBytes: 1024 * 1024, seed: 7);
         Directory.CreateDirectory(outputPath);
 
@@ -1016,9 +1004,9 @@ public sealed class SortRoundTripTests : IDisposable
     [Trait("Case", "ET-17")]
     public void A_budget_too_small_to_plan_exits_3_naming_the_minimum_before_creating_anything()
     {
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         File.WriteAllText(inputPath, "1. a\n");
 
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 1024 * 1024, 64 * 1024, Parallelism: 16, Pipeline.Channels);

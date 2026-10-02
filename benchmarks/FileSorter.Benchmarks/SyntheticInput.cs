@@ -1,47 +1,28 @@
-using System.Text;
+using TestFileGenerator.Generation;
 
 namespace FileSorter.Benchmarks;
 
-// Generates deterministic "<Number>. <String>" input for benchmarks. It is separate from
-// TestFileGenerator because the projects do not share internals.
+// Benchmark input is the real generator's output, so a change to key handling is measured
+// against the same string-part vocabulary, number shapes and duplicate mix the shipped file
+// has. The generator's default duplicate ratio is used for the same reason.
 internal static class SyntheticInput
 {
-    // Vary line lengths to exercise chunk boundaries and carry-over.
-    private static readonly string[] Vocabulary =
-    [
-        "Apple",
-        "Banana Republic",
-        "Cherry Blossom Lane",
-        "Date",
-        "Elderberry Preserve",
-        "Fig Newton Factory",
-        "Grape Vineyard Road",
-        "Honeydew",
-        "Indigo Iris Garden",
-        "Jackfruit Junction Market Street",
-    ];
+    private const double DuplicateRatio = 0.1;
 
     // The seed gives stable input. The final line is omitted when it would exceed the target.
     public static byte[] Generate(long targetBytes, int seed)
     {
-        Random random = new(seed);
-        using MemoryStream buffer = new(checked((int)targetBytes) + 256);
+        // The generator's output size is only known once it has run, and an array cannot
+        // be shrunk. A counting pass with the same seed sizes the array exactly, which
+        // avoids both a growing stream and a trimming copy.
+        long exactBytes = FileWriter.Write(Stream.Null, NewComposer(seed), targetBytes, CancellationToken.None);
 
-        while (buffer.Length < targetBytes)
-        {
-            long number = random.NextInt64(0, 1_000_000_000);
-            string word = Vocabulary[random.Next(Vocabulary.Length)];
-            string line = $"{number}. {word}\n";
-            byte[] encoded = Encoding.ASCII.GetBytes(line);
-
-            if (buffer.Length + encoded.Length > targetBytes)
-            {
-                break;
-            }
-
-            buffer.Write(encoded, 0, encoded.Length);
-        }
-
-        return buffer.ToArray();
+        byte[] data = new byte[checked((int)exactBytes)];
+        using MemoryStream fixedBuffer = new(data);
+        FileWriter.Write(fixedBuffer, NewComposer(seed), targetBytes, CancellationToken.None);
+        return data;
     }
+
+    private static LineComposer NewComposer(int seed) =>
+        new(new GeneratorOptions(OutputPath: string.Empty, TargetBytes: 0, seed, DuplicateRatio));
 }

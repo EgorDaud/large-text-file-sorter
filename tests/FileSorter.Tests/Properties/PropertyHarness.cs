@@ -1,4 +1,5 @@
 using FileSorter.Startup;
+using FileSorter.Tests.Support;
 
 namespace FileSorter.Tests.Properties;
 
@@ -24,33 +25,26 @@ internal static class PropertyHarness
     public static async Task<byte[]> RunSorterAsync(
         byte[] input, long memoryBudgetBytes, int maxLineLength, CancellationToken ct, int parallelism = 2)
     {
-        string directory = Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        try
+        using TempDirectory directory = new();
+
+        string inputPath = Path.Combine(directory.Path, "in.txt");
+        string outputPath = Path.Combine(directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(directory.Path, "temp");
+        await File.WriteAllBytesAsync(inputPath, input, ct);
+
+        // Channels, not Akka: the two pipelines are shown to agree by their own
+        // tests, and paying Akka's ActorSystem startup on every iteration would make
+        // a few hundred iterations slow for a question already answered elsewhere.
+        SorterOptions options = new(
+            inputPath, outputPath, tempDirectory, memoryBudgetBytes, maxLineLength, parallelism, Pipeline.Channels);
+
+        int exitCode = await Program.RunAsync(options, ct).WaitAsync(BoundedWait, ct);
+        if (exitCode != 0)
         {
-            string inputPath = Path.Combine(directory, "in.txt");
-            string outputPath = Path.Combine(directory, "out.txt");
-            string tempDirectory = Path.Combine(directory, "temp");
-            await File.WriteAllBytesAsync(inputPath, input, ct);
-
-            // Channels, not Akka: the two pipelines are shown to agree by their own
-            // tests, and paying Akka's ActorSystem startup on every iteration would make
-            // a few hundred iterations slow for a question already answered elsewhere.
-            SorterOptions options = new(
-                inputPath, outputPath, tempDirectory, memoryBudgetBytes, maxLineLength, parallelism, Pipeline.Channels);
-
-            int exitCode = await Program.RunAsync(options, ct).WaitAsync(BoundedWait, ct);
-            if (exitCode != 0)
-            {
-                throw new InvalidOperationException(
-                    $"The sorter exited with code {exitCode} for a property-generated input; expected success.");
-            }
-
-            return await File.ReadAllBytesAsync(outputPath, ct);
+            throw new InvalidOperationException(
+                $"The sorter exited with code {exitCode} for a property-generated input; expected success.");
         }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
+
+        return await File.ReadAllBytesAsync(outputPath, ct);
     }
 }

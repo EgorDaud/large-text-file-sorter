@@ -1,6 +1,7 @@
 using System.Text;
 using FileSorter.RunGeneration;
 using FileSorter.Startup;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.RunGeneration;
@@ -10,21 +11,14 @@ namespace FileSorter.Tests.RunGeneration;
 // scratch directory.
 public sealed class ChunkSpillerTests : IDisposable
 {
-    private readonly string _directory =
-        Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
+    private readonly TempDirectory _directory = new();
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_directory))
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-    }
+    public void Dispose() => _directory.Dispose();
 
     [Fact]
     public async Task Spilling_writes_a_sorted_run_with_single_character_terminators()
     {
-        using TemporaryRunSet runs = new(_directory);
+        using TemporaryRunSet runs = new(_directory.Path);
         ChunkSpiller spiller = new(runs, spillBufferSize: 4096);
         Chunk chunk = await BuildChunkAsync("3. Cherry\r\n1. Apple\r\n2. Banana\r\n"u8.ToArray());
 
@@ -51,7 +45,7 @@ public sealed class ChunkSpillerTests : IDisposable
         long expectedLength = lines.Sum(line => Encoding.UTF8.GetByteCount(line) + 1);
         Chunk chunk = await BuildChunkAsync(Encoding.UTF8.GetBytes(string.Concat(lines.Select(line => line + "\r\n"))));
 
-        using TemporaryRunSet runs = new(_directory);
+        using TemporaryRunSet runs = new(_directory.Path);
         ChunkSpiller spiller = new(runs, spillBufferSize: 4096);
 
         string path = await spiller.SpillAsync(chunk, TestContext.Current.CancellationToken);
@@ -69,7 +63,7 @@ public sealed class ChunkSpillerTests : IDisposable
         // buffer (4096 bytes below) holds these lines regardless. One over-length line
         // follows two that have partly filled the staging buffer, and a second is the
         // last line in the chunk.
-        using TemporaryRunSet runs = new(_directory);
+        using TemporaryRunSet runs = new(_directory.Path);
         ChunkSpiller spiller = new(runs, spillBufferSize: 64);
 
         // ChunkSorter orders by string part first, not by the leading number, so the
@@ -90,7 +84,7 @@ public sealed class ChunkSpillerTests : IDisposable
     [Fact]
     public async Task Spilling_releases_the_pool_slot_on_the_success_path()
     {
-        using TemporaryRunSet runs = new(_directory);
+        using TemporaryRunSet runs = new(_directory.Path);
         ChunkSpiller spiller = new(runs, spillBufferSize: 4096);
         (Chunk chunk, BufferPool pool) = await BuildChunkWithPoolAsync("1. Apple\n"u8.ToArray());
 
@@ -102,7 +96,7 @@ public sealed class ChunkSpillerTests : IDisposable
     [Fact]
     public async Task Spilling_releases_the_pool_slot_when_writing_the_run_throws()
     {
-        using TemporaryRunSet runs = new(_directory);
+        using TemporaryRunSet runs = new(_directory.Path);
         (Chunk chunk, BufferPool pool) = await BuildChunkWithPoolAsync("1. Apple\n"u8.ToArray());
 
         // Run paths live inside this instance's own private directory, whose random
@@ -128,7 +122,7 @@ public sealed class ChunkSpillerTests : IDisposable
     [Fact]
     public async Task Spilling_an_empty_chunk_writes_an_empty_run_and_still_releases_the_slot()
     {
-        using TemporaryRunSet runs = new(_directory);
+        using TemporaryRunSet runs = new(_directory.Path);
         ChunkSpiller spiller = new(runs, spillBufferSize: 4096);
         BufferPool pool = new(bufferSize: 4096, descriptorCapacity: 16, capacity: 1);
         Chunk chunk = new(await pool.AcquireAsync(TestContext.Current.CancellationToken), Count: 0);

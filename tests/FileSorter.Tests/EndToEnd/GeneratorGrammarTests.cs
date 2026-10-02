@@ -4,7 +4,7 @@ using Xunit;
 
 namespace FileSorter.Tests.EndToEnd;
 
-public sealed class GenerationRoundTripTests
+public sealed class GeneratorGrammarTests
 {
     // The sorter's own CLI default, not the generator's much smaller
     // MaxComposedLineLength: this test stands in for the sorter reading a real file,

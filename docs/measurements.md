@@ -6,6 +6,8 @@ Every number the README's "Results" section refers to, measured on one machine, 
 
 **Input.** `TestFileGenerator` at seed 42, average line length 37.64 bytes. The 20 GiB file holds 570,483,043 lines and hashes to `2e91107033e198d4`; the 100 GiB file is described in section 2.
 
+**Benchmark input changed on 2026-10-02.** The in-process benchmarks and `-- --flatness` used to generate their input from a hand-rolled ten-word ASCII vocabulary. They now call `TestFileGenerator`'s own `LineComposer` (seeded, default 0.1 duplicate ratio), so their data has the shipped file's shape. Benchmark and flatness figures recorded before 2026-10-02 used the old vocabulary and are not directly comparable with figures taken after it; they are left as recorded.
+
 ---
 
 ## What reproduces, and what does not
@@ -238,6 +240,22 @@ Three instruments over real 110.7 MiB chunks of the 20 GiB file at the target bu
 
 Every range the descent enters on such input is a block of byte-identical keys — exactly what the depth cap bounds. A cap of 32 is faster on real data but costs +20.0% on the 200-byte shape where 16 costs +6.2%, which is why 16 ships. Real chunks have 48 distinct first bytes, not one, which is also why these instruments avoid a synthetic vocabulary.
 
+### The radix against a plain introsort
+
+Measured 2026-10-02 with `ChunkSortBenchmarks` (the full job: 2 launches, 5 warm-up and 20 measured iterations, about 17 minutes) on the generator's own input through `SyntheticInput`, seed 20260907, AMD Ryzen 7 7840HS, .NET 10.0.11, one descriptor-array copy per iteration. `PlainIntrosort` is the baseline: `Span<LineDescriptor>.Sort` with a struct comparer over the same `LineOrder.Compare` and cached prefix, no bucketing in front of it. `Sort` is the shipped `ChunkSorter.Sort`.
+
+| Chunk | Plain introsort (mean ± error) | `ChunkSorter.Sort` (mean ± error) | Ratio | Allocated, plain / radix |
+|---|---|---|---|---|
+| 16 MiB | 130.7 ± 2.8 ms | 61.0 ± 1.5 ms | 0.47 | 88 B / 4.6 MiB |
+| 32 MiB | 297.8 ± 11.9 ms | 129.6 ± 4.6 ms | 0.44 | 88 B / 11.4 MiB |
+| 64 MiB | 729.1 ± 117.0 ms | 286.6 ± 7.3 ms | 0.42 | 88 B / 21.5 MiB |
+| **110 MiB** | 1,155.1 ± 27.5 ms | 554.9 ± 15.1 ms | **0.48** | 88 B / 32.3 MiB |
+| **166 MiB** | 1,805.4 ± 46.8 ms | 1,599.1 ± 265.0 ms | 0.89 (see below) | 88 B / 44.8 MiB |
+| **221 MiB** | 2,712.8 ± 85.6 ms | 1,342.9 ± 44.1 ms | **0.50** | 88 B / 57.3 MiB |
+| 320 MiB | 4,104.3 ± 201.7 ms | 2,597.0 ± 473.2 ms | 0.64 | 88 B / 79.5 MiB |
+
+**The radix is about twice as fast as a plain introsort with the cached-prefix comparer at the 110 and 221 MiB budgets (ratios 0.48 and 0.50, errors under 5% of the mean), well past the 10% bar, and that measurement justifies keeping it.** The ratio is 0.42–0.50 at every size with a tight error. The 166 MiB and 320 MiB rows, and the 64 MiB baseline, have wide errors from bimodal iterations on a laptop; a rerun of the 166 MiB row alone gave 2,956 ± 521 ms plain against 984 ± 69 ms radix (0.37), so that row is noise-limited, not a counter-example. The allocation column is the price: the diagnoser reports 4.6–79.5 MiB per radix sort against 88 B for the plain one (the source of that allocation was not investigated here).
+
 ---
 
 ## 7. The memory-flatness matrices
@@ -263,6 +281,8 @@ Rerun on 2026-09-30 with both pipelines (`-- --flatness`, 16 MiB budget, `MergeP
 | 100 MiB | 22.76 MiB | +42.2% | 23.07 MiB | +44.2% |
 
 Spread: 40.8% for Channels and 39.4% for Akka, both within the 60% tolerance. The Akka worker includes `ActorSystem` startup in its sampled window.
+
+Rerun on 2026-10-02, the first on the generator's own input (see the note at the top): 48.3% for Channels and 43.7% for Akka, 100 MiB peaks of 24.55 and 24.35 MiB. Still within the 60% tolerance, but the figures are not directly comparable with the 2026-09-30 rerun above, which used the old ten-word vocabulary; the realistic input changes the allocation pattern, so the spreads differ.
 
 **The climb is GC bookkeeping, not growth in the retained set.** The byte count immediately after `BufferPool` construction — the configured footprint the guarantee describes — is flat at roughly 15 MiB whatever the input size, checked directly. Generation budgets and segment counts grow with the *number* of collections a run triggers, which scales with chunk count at a fixed budget, not with what is retained.
 
