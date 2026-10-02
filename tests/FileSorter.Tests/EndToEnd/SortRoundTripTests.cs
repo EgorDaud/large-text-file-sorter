@@ -566,6 +566,25 @@ public sealed class SortRoundTripTests : IDisposable
         }
     }
 
+    // For failures whose exit code ConsoleRun decides, such as a destination placement
+    // cannot replace. Program.RunAsync itself lets those exceptions propagate.
+    private static async Task<(int ExitCode, string Stderr)> RunThroughConsoleRunCapturedAsync(SorterOptions options)
+    {
+        TextWriter originalError = Console.Error;
+        StringWriter capturedError = new();
+        Console.SetError(capturedError);
+        try
+        {
+            int exitCode = await Task.Run(() => ConsoleRun.Run(ct => Program.RunAsync(options, ct)))
+                .WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
+            return (exitCode, capturedError.ToString());
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+    }
+
     [Fact]
     [Trait("Case", "ET-05")]
     public async Task Sorting_the_sorters_own_output_again_loses_a_trailing_content_carriage_return()
@@ -856,7 +875,7 @@ public sealed class SortRoundTripTests : IDisposable
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
         try
         {
-            (int exitCode, string stderr) = await RunCapturedAsync(options);
+            (int exitCode, string stderr) = await RunThroughConsoleRunCapturedAsync(options);
 
             Assert.Equal(3, exitCode);
             Assert.Contains(outputPath, stderr, StringComparison.Ordinal);
@@ -891,7 +910,7 @@ public sealed class SortRoundTripTests : IDisposable
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
         try
         {
-            (int exitCode, string stderr) = await RunCapturedAsync(options);
+            (int exitCode, string stderr) = await RunThroughConsoleRunCapturedAsync(options);
 
             Assert.Equal(3, exitCode);
             Assert.Contains(outputPath, stderr, StringComparison.Ordinal);
@@ -938,7 +957,7 @@ public sealed class SortRoundTripTests : IDisposable
         Directory.CreateDirectory(outputPath);
 
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
-        (int exitCode, string stderr) = await RunCapturedAsync(options);
+        (int exitCode, string stderr) = await RunThroughConsoleRunCapturedAsync(options);
 
         Assert.Equal(3, exitCode);
         Assert.Contains(outputPath, stderr, StringComparison.Ordinal);
@@ -957,7 +976,7 @@ public sealed class SortRoundTripTests : IDisposable
         Directory.CreateDirectory(outputPath);
 
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
-        (int exitCode, string stderr) = await RunCapturedAsync(options);
+        (int exitCode, string stderr) = await RunThroughConsoleRunCapturedAsync(options);
 
         Assert.Equal(3, exitCode);
         Assert.Contains(outputPath, stderr, StringComparison.Ordinal);

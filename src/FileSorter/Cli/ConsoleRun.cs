@@ -39,6 +39,13 @@ internal static class ConsoleRun
         {
             return ExitCodes.Cancelled;
         }
+        catch (DestinationReplaceFailedException ex)
+        {
+            // Its inner failure is I/O, but a destination that cannot be replaced is
+            // reported like an invalid output path rather than as exit 5.
+            Console.Error.WriteLine(ex.Message);
+            return ExitCodes.InvalidArguments;
+        }
         catch (MalformedLineException ex)
         {
             Console.Error.WriteLine(ex.Message);

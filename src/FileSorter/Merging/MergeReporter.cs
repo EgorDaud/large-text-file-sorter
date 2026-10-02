@@ -4,7 +4,7 @@ using FileSorter.Infrastructure;
 
 namespace FileSorter.Merging;
 
-// Phase two's stderr lines: the periodic progress line and the end-of-merge shape summary.
+// Phase two's stderr lines: the periodic progress line and the end-of-merge summary.
 internal static class MergeReporter
 {
     internal static async Task ReportProgressAsync(MergeExecutor executor, Stopwatch clock, CancellationToken ct)
@@ -31,8 +31,19 @@ internal static class MergeReporter
         }
     }
 
+    // Reports the merge's shape, then how long it waited on output writes. Report actual
+    // workers: a multi-pass merge may use fewer than the plan allows.
+    internal static void ReportSummary(MergeExecutor executor)
+    {
+        ReportShape(executor);
+        Console.Error.WriteLine(
+            executor.Partition is { Workers: > 1 } partition
+                ? $"  merge waited {executor.OutputWaitSeconds:F1}s on output writes (summed across {partition.Workers} workers)"
+                : $"  merge waited {executor.OutputWaitSeconds:F1}s on output writes");
+    }
+
     // Reports actual merge parallelism, splitter cost, slice balance, and preallocation.
-    internal static void ReportShape(MergeExecutor executor)
+    private static void ReportShape(MergeExecutor executor)
     {
         if (executor.Partition is not { } stats)
         {

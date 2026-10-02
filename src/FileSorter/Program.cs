@@ -12,13 +12,9 @@ using FileSorter.Verification;
 
 namespace FileSorter;
 
-// Dispatches commands, runs the sort phases, and maps failures to exit codes.
+// Dispatches commands, validates the sort, and runs its phases. ConsoleRun maps failures to exit codes.
 internal static class Program
 {
-    // Labels destination replacement failures for exit 3. Merge write failures propagate separately.
-    private sealed class DestinationReplaceFailedException(string outputPath, Exception inner)
-        : Exception($"Output file '{outputPath}' could not be written: {inner.Message}", inner);
-
     // Sizes descriptor arrays without constraining valid input. A lower estimate uses more
     // descriptor memory; a higher one fills descriptors sooner and can increase carry copying.
     // 32 keeps byte buffers filling first on the generated benchmark data.
@@ -116,30 +112,22 @@ internal static class Program
 
         Stopwatch clock = Stopwatch.StartNew();
 
-        try
+        if (options.Pipeline is Pipeline.Akka)
         {
-            if (options.Pipeline is Pipeline.Akka)
-            {
-                // Suppress Akka's console logger to keep stdout empty on success.
-                Config quiet = ConfigurationFactory.ParseString("akka.loglevel = OFF\nakka.stdout-loglevel = OFF");
+            // Suppress Akka's console logger to keep stdout empty on success.
+            Config quiet = ConfigurationFactory.ParseString("akka.loglevel = OFF\nakka.stdout-loglevel = OFF");
 
-                // The ActorSystem owns the materializer lifetime.
-                using ActorSystem system = ActorSystem.Create("sorter", quiet);
-                IMaterializer materializer = system.Materializer();
-                await RunPhasesAsync(
-                    options, inputInfo, plan, runs,
-                    (reader, spill, parallelism, token) => AkkaRunGeneration.RunAsync(reader, spill, parallelism, materializer, token),
-                    clock, ct);
-            }
-            else
-            {
-                await RunPhasesAsync(options, inputInfo, plan, runs, ChannelRunGeneration.RunAsync, clock, ct);
-            }
+            // The ActorSystem owns the materializer lifetime.
+            using ActorSystem system = ActorSystem.Create("sorter", quiet);
+            IMaterializer materializer = system.Materializer();
+            await RunPhasesAsync(
+                options, inputInfo, plan, runs,
+                (reader, spill, parallelism, token) => AkkaRunGeneration.RunAsync(reader, spill, parallelism, materializer, token),
+                clock, ct);
         }
-        catch (DestinationReplaceFailedException ex)
+        else
         {
-            Console.Error.WriteLine(ex.Message);
-            return ExitCodes.InvalidArguments;
+            await RunPhasesAsync(options, inputInfo, plan, runs, ChannelRunGeneration.RunAsync, clock, ct);
         }
 
         Console.Error.WriteLine($"Sorted {ProgressReporter.Describe(inputInfo.Length)} in {clock.Elapsed.TotalSeconds:F1}s.");
@@ -199,12 +187,7 @@ internal static class Program
                     () => executor.ExecuteAsync(runPaths, options.OutputPath, ct),
                     ct);
 
-                // Report actual workers: a multi-pass merge may use fewer than the plan allows.
-                MergeReporter.ReportShape(executor);
-                Console.Error.WriteLine(
-                    executor.Partition is { Workers: > 1 } partition
-                        ? $"  merge waited {executor.OutputWaitSeconds:F1}s on output writes (summed across {partition.Workers} workers)"
-                        : $"  merge waited {executor.OutputWaitSeconds:F1}s on output writes");
+                MergeReporter.ReportSummary(executor);
             }
         }
         catch
