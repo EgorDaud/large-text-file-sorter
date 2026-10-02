@@ -43,8 +43,7 @@ public class RunGenerationBenchmarks
     public void GlobalSetup()
     {
         _data = SyntheticInput.Generate(InputSizeBytes, Seed);
-        _tempRoot = Path.Combine(Path.GetTempPath(), "FileSorter.Benchmarks", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tempRoot);
+        _tempRoot = ScratchDirectory.Create("FileSorter.Benchmarks");
 
         _plan = MemoryBudget.Calculate(MemoryBudgetBytes, Parallelism, MaxLineLength, AssumedMeanLineLength);
 
@@ -59,10 +58,7 @@ public class RunGenerationBenchmarks
     {
         _system?.Dispose();
 
-        if (Directory.Exists(_tempRoot))
-        {
-            Directory.Delete(_tempRoot, recursive: true);
-        }
+        ScratchDirectory.Delete(_tempRoot);
     }
 
     // Reader, pool, and run ownership are rebuilt because each iteration consumes them.

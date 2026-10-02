@@ -47,8 +47,7 @@ public class MergeBenchmarks
     [GlobalSetup]
     public async Task GlobalSetupAsync()
     {
-        _tempRoot = Path.Combine(Path.GetTempPath(), "FileSorter.Benchmarks.Merge", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tempRoot);
+        _tempRoot = ScratchDirectory.Create("FileSorter.Benchmarks.Merge");
 
         _plan = MemoryBudget.Calculate(MemoryBudgetBytes, Parallelism, MaxLineLength, AssumedMeanLineLength);
 
@@ -85,10 +84,7 @@ public class MergeBenchmarks
         // Remove tracked runs and any leftover temporary files.
         _runs?.Dispose();
 
-        if (Directory.Exists(_tempRoot))
-        {
-            Directory.Delete(_tempRoot, recursive: true);
-        }
+        ScratchDirectory.Delete(_tempRoot);
     }
 
     // Targeted setup opens streams only for Disk. MergeAsync owns and closes them, so each

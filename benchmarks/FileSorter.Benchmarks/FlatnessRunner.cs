@@ -59,8 +59,7 @@ internal static class FlatnessRunner
     private static async Task<int> RunMatrixAsync(
         string description, long memoryBudgetBytes, (string Label, long Bytes)[] sizes)
     {
-        string tempRoot = Path.Combine(Path.GetTempPath(), "FileSorter.Benchmarks.Flatness", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempRoot);
+        string tempRoot = ScratchDirectory.Create("FileSorter.Benchmarks.Flatness");
 
         Pipeline[] pipelines = [Pipeline.Channels, Pipeline.Akka];
         List<(Pipeline Pipeline, string Label, long InputBytes, long PeakBytes, int MergeParallelism)> results = [];
@@ -84,7 +83,7 @@ internal static class FlatnessRunner
         }
         finally
         {
-            Directory.Delete(tempRoot, recursive: true);
+            ScratchDirectory.Delete(tempRoot);
         }
 
         // Each matrix must report the same merge parallelism for every size and pipeline.

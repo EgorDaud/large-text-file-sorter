@@ -45,8 +45,7 @@ public class PartitionedMergeBenchmarks
     [GlobalSetup]
     public async Task GlobalSetupAsync()
     {
-        _tempRoot = Path.Combine(Path.GetTempPath(), "FileSorter.Benchmarks.PartitionedMerge", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tempRoot);
+        _tempRoot = ScratchDirectory.Create("FileSorter.Benchmarks.PartitionedMerge");
         _runTemplateRoot = Path.Combine(_tempRoot, "template");
         Directory.CreateDirectory(_runTemplateRoot);
 
@@ -107,10 +106,7 @@ public class PartitionedMergeBenchmarks
     [GlobalCleanup]
     public void GlobalCleanup()
     {
-        if (Directory.Exists(_tempRoot))
-        {
-            Directory.Delete(_tempRoot, recursive: true);
-        }
+        ScratchDirectory.Delete(_tempRoot);
     }
 
     // Rebuild consumed run files synchronously because BenchmarkDotNet setup is synchronous.

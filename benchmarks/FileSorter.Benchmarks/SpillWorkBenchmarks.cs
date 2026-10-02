@@ -45,8 +45,7 @@ public class SpillWorkBenchmarks
     public void GlobalSetup()
     {
         _data = SyntheticInput.Generate(InputSizeBytes, Seed);
-        _tempRoot = Path.Combine(Path.GetTempPath(), "FileSorter.Benchmarks", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tempRoot);
+        _tempRoot = ScratchDirectory.Create("FileSorter.Benchmarks");
         _plan = MemoryBudget.Calculate(MemoryBudgetBytes, Parallelism, MaxLineLength, AssumedMeanLineLength);
 
         Config quiet = ConfigurationFactory.ParseString("akka.loglevel = OFF\nakka.stdout-loglevel = OFF");
@@ -59,10 +58,7 @@ public class SpillWorkBenchmarks
     {
         _system?.Dispose();
 
-        if (Directory.Exists(_tempRoot))
-        {
-            Directory.Delete(_tempRoot, recursive: true);
-        }
+        ScratchDirectory.Delete(_tempRoot);
     }
 
     [IterationSetup]

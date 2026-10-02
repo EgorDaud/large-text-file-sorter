@@ -1,27 +1,25 @@
 using FileSorter.Infrastructure;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Infrastructure;
 
 // The one type in this slice that is allowed to touch the real file system: it exists
 // specifically to own temp files, so its tests use a real scratch directory rather than
-// a MemoryStream. Every test creates and removes that directory itself, so the suite
-// leaves nothing behind regardless of what TemporaryRunSet's own cleanup does.
+// a MemoryStream. The temp directory is a not-yet-created child of a TempDirectory, so
+// tests can watch TemporaryRunSet create it, and the scratch root's removal leaves the
+// suite clean regardless of what TemporaryRunSet's own cleanup does.
 // In the "Program" collection because TR-05 makes Delete write to the process-wide
 // Console.Error, which the sort tests swap out to capture their own stderr.
 [Collection("Program")]
 public sealed class TemporaryRunSetTests : IDisposable
 {
-    private readonly string _directory =
-        Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
+    private readonly TempDirectory _scratch = new();
+    private readonly string _directory;
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_directory))
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-    }
+    public TemporaryRunSetTests() => _directory = Path.Combine(_scratch.Path, "temp");
+
+    public void Dispose() => _scratch.Dispose();
 
     [Fact]
     [Trait("Case", "TR-01")]
