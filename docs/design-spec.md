@@ -57,6 +57,7 @@ FileSorter/
     LineCursor.cs                 line boundaries, terminators, carry-over, length limit
     LineParser.cs                 the line grammar
     LineOrder.cs                  the three-level comparator
+    LineStager.cs                 batches LF-terminated lines into one caller-supplied write buffer
     MalformedLineException.cs
   RunGeneration/
     BufferPool.cs                 BufferPool, PooledBuffer
@@ -79,6 +80,7 @@ FileSorter/
     RunCursorBuffers.cs           the two read-ahead windows and descriptor array per cursor
     KWayMerge.cs                  one group of runs into one output
     RunPlacement.cs
+    StagingFile.cs                unique staging path beside a destination, and its best-effort delete
     MergeProgress.cs              bytes written and output-wait time, shared across one merge call
     RangePartitioner.cs           sample, then locate one partition of every run by key range
     RangePartition.cs             the located offsets, slice lengths and output offsets
@@ -585,8 +587,13 @@ internal static class RunPlacement
 The single-run shortcut: when phase one produced one run, phase two moves it to the output path rather than reading and rewriting it, removing a full read and a full write at a hundred gigabytes. The `tryMove` delegate is the named-delegate seam of section 1 — the cross-volume fallback is forced by a two-line lambda in the tests rather than by a second volume. The copy fallback does not write onto the output path directly: it stages beside it and moves into place once the copy has finished without error. `Program` owns the branch (D14):
 
 ```csharp
-if (runPaths.Count == 1)
-    RunPlacement.Place(runPaths[0], options.OutputPath, runs);
+if (runPaths.Count <= 1)
+{
+    if (runPaths.Count == 0)
+        RunPlacement.PlaceEmpty(options.OutputPath);
+    else
+        RunPlacement.Place(runPaths[0], options.OutputPath, runs);
+}
 else
     await executor.ExecuteAsync(runPaths, options.OutputPath, ct);
 ```
@@ -902,8 +909,8 @@ Cancellation in the sorter: `ConsoleRun` cancels the token on the first `Console
 | Unit 3, the line descriptor and chunk model | `LineFormat/LineDescriptor`, `RunGeneration/Chunk` |
 | Unit 4, the chunk boundary splitter, including CB-12 and CB-16 | `LineFormat/LineCursor` |
 | Unit 5, the in-memory chunk sorter | `RunGeneration/ChunkSorter.Sort` |
-| Unit 6, the k-way merge | `Merging/KWayMerge.MergeAsync`, `Merging/RunCursor` |
-| Unit 6, the single-run shortcut | `Merging/RunPlacement.Place`, branched in `Program` |
+| Unit 6, the k-way merge | `Merging/KWayMerge.MergeAsync`, `Merging/RunCursor`, `LineFormat/LineStager` |
+| Unit 6, the single-run shortcut | `Merging/RunPlacement.Place`, `Merging/StagingFile`, branched in `Program` |
 | Unit 6a, the range partition and the merge slices | `Merging/RangePartitioner.Locate`, `RangePartition`, `RunSliceStream`, `OutputSliceStream`, `SparseFile`, `PartitionedMerge` |
 | Unit 7, the multi-pass merge planner | `Merging/MergePlanner.Plan` |
 | Unit 7, MP-10, predicted versus actual pass count | `Merging/MergeExecutor.ExecuteAsync`, `PassesExecuted` |

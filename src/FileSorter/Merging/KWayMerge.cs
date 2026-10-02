@@ -48,8 +48,9 @@ internal static class KWayMerge
 
             tree.Build();
 
+            LineStager stager = CreateOutputStager(outputStagingBuffer, output, progress, ct);
+
             // Copy the winning line before advancing its cursor, so its buffer remains stable.
-            LineStager stager = new(outputStagingBuffer, data => TimedWriteAsync(output, data, progress, ct));
             while (tree.WinnerIsAlive)
             {
                 int run = tree.Winner;
@@ -120,6 +121,13 @@ internal static class KWayMerge
 
         return disposalFailures?[0];
     }
+
+    // Builds the stager here so the write callback's closure belongs to this method. A lambda
+    // inside MergeAsync would hoist output, progress and ct into a closure class that the
+    // per-line loop then reads through an extra indirection.
+    private static LineStager CreateOutputStager(
+        byte[] buffer, Stream output, MergeProgress progress, CancellationToken ct) =>
+        new(buffer, data => TimedWriteAsync(output, data, progress, ct));
 
     // Measures every output write once for both byte and wait-time progress.
     private static async ValueTask TimedWriteAsync(

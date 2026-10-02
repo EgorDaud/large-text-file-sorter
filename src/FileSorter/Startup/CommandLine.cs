@@ -272,7 +272,7 @@ internal static class CommandLine
         return true;
     }
 
-    internal static bool TryParseSize(string text, out long bytes)
+    private static bool TryParseSize(string text, out long bytes)
     {
         bytes = 0;
         long multiplier = 1;

@@ -44,7 +44,7 @@ internal sealed class ChunkSpiller
 
             // A spill needs its own staging buffer because one ChunkSpiller serves
             // concurrent calls. Each flush writes complete lines and observes cancellation.
-            LineStager stager = new(new byte[_spillBufferSize], data => file.WriteAsync(data, ct));
+            LineStager stager = CreateFileStager(new byte[_spillBufferSize], file, ct);
             for (int i = 0; i < chunk.Count; i++)
             {
                 LineDescriptor line = lines[i];
@@ -71,4 +71,9 @@ internal sealed class ChunkSpiller
             chunk.Buffer.Dispose();
         }
     }
+
+    // Builds the stager here so the write callback's closure belongs to this method rather
+    // than hoisting file and ct into the async SpillAsync.
+    private static LineStager CreateFileStager(byte[] buffer, FileStream file, CancellationToken ct) =>
+        new(buffer, data => file.WriteAsync(data, ct));
 }
