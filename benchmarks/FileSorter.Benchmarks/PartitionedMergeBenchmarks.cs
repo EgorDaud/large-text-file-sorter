@@ -53,8 +53,7 @@ public class PartitionedMergeBenchmarks
             throw new InvalidOperationException(
                 $"Expected MemoryBudget.Calculate({MergePlanBudgetBytes}, {MergePlanParallelism}, {MaxLineLength}, " +
                 $"{MemoryBudget.AssumedMeanLineLength}) to give MergeParallelism {MergePlanParallelism}, but got " +
-                $"{_mergePlanAt8.MergeParallelism}. MergePlanBudgetBytes needs raising (see this class's own comment " +
-                "for the arithmetic).");
+                $"{_mergePlanAt8.MergeParallelism}. Raise MergePlanBudgetBytes.");
         }
 
         foreach (int workers in (int[])[1, 2, 4, 8])
@@ -64,8 +63,8 @@ public class PartitionedMergeBenchmarks
             {
                 throw new InvalidOperationException(
                     $"Forcing MergeParallelism to {workers} on the plan built for {MergePlanParallelism} workers " +
-                    $"exceeds the budget ({forced.WorstCasePhaseTwoBytes} > {MergePlanBudgetBytes} bytes), which the " +
-                    "class doc comment's monotonicity argument says cannot happen.");
+                    $"exceeds the budget ({forced.WorstCasePhaseTwoBytes} > {MergePlanBudgetBytes} bytes); fewer workers " +
+                    "must never cost more.");
             }
         }
 

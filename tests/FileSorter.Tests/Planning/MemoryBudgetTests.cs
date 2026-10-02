@@ -191,7 +191,7 @@ public sealed class MemoryBudgetTests
         Assert.Equal("budgetBytes", ex.ParamName);
         Assert.Contains("1053792", ex.Message);
         Assert.Contains("1053791", ex.Message);
-        Assert.Contains("1", ex.Message);
+        Assert.Contains("at parallelism 1.", ex.Message);
     }
 
     [Fact]
