@@ -1,37 +1,18 @@
 using CsCheck;
-using FileSorter.Startup;
+using FileSorter.Cli;
+using FileSorter.Planning;
 using Xunit;
 
 namespace FileSorter.Tests.Properties;
 
-/// <summary>
-/// Property coverage for <see cref="MemoryBudget.Calculate"/> over the whole of its
-/// input space. MemoryBudgetTests pins hand-derived figures at chosen points; this fuzzes
-/// the space between them, where a budget solver built from floored integer divisions and
-/// a worker-count search can go wrong without any single curated point noticing: a plan
-/// that overspends its own budget, a viability boundary that is not where
-/// <see cref="MemoryBudget.MinimumViableBudget"/> says it is, or a larger budget that buys
-/// a smaller chunk or fan-in. The contract here is deliberately independent of how
-/// Calculate reaches its answer, so it holds across a rewrite of the solver.
-/// </summary>
 public sealed class MemoryBudgetPropertyTests
 {
-    // Program.AssumedMeanLineLength, which is private; AssumedMeanFor clamps it to
-    // --max-line so a tiny line limit never produces an invalid pair.
-    private const int ShippedAssumedMeanLineLength = 32;
-
     private static readonly int MaxLineLengthCeiling = (int)CommandLine.MaxLineLengthCeiling;
 
     private const long MaxBudget = 256L << 30;
 
     private static readonly Gen<int> Parallelism = Gen.Int[1, 64];
 
-    // Line limits and absolute budgets are drawn log-uniformly: each has to be tried at
-    // every order of magnitude, not mostly at the largest one, which a plain uniform range
-    // would do. A budget is either absolute, from 1 KiB to 256 GiB, or one placed relative to the
-    // minimum viable budget for the drawn pair, from just under it to about 90 times it.
-    // The absolute draw alone would almost never land near the boundary for a large
-    // --max-line, whose minimum is itself in the gigabytes.
     private static readonly Gen<(bool Relative, double Position)> BudgetShape = Gen.Select(Gen.Bool, Gen.Double[0, 1]);
 
     private static readonly Gen<(int Parallelism, int MaxLineLength, long BudgetBytes)> Scenario =
@@ -69,11 +50,8 @@ public sealed class MemoryBudgetPropertyTests
         Scenario.Sample(scenario =>
         {
             (int parallelism, int maxLineLength, long budget) = scenario;
-            long minimum = MemoryBudget.MinimumViableBudget(parallelism, maxLineLength, AssumedMeanFor(maxLineLength));
+            long minimum = MemoryBudget.MinimumViableBudget(parallelism, maxLineLength, MemoryBudget.AssumedMeanFor(maxLineLength));
 
-            // MinimumViableBudget is a binary search over TryCalculate, which assumes
-            // viability is monotone, so this checks both the edge and a drawn budget on
-            // either side of it, rather than only that the edge is where it should be.
             Assert.True(
                 TryCalculate(minimum, parallelism, maxLineLength, out _),
                 $"the minimum viable budget {minimum} is not viable: {Describe(minimum, parallelism, maxLineLength)}");
@@ -90,15 +68,11 @@ public sealed class MemoryBudgetPropertyTests
     [Trait("Case", "PB-22")]
     public void Minimum_viable_budget_is_viable_for_the_largest_max_lines_the_command_line_accepts()
     {
-        // The sampled draws almost never land on the last few line limits, where the
-        // chunk must still exceed maxLine + 2 yet fit one array. A ceiling above
-        // Array.MaxLength - 3 once made MinimumViableBudget name a figure at which
-        // Calculate still threw; the CLI ceiling now excludes that.
         for (int parallelism = 1; parallelism <= 64; parallelism++)
         {
             foreach (int maxLineLength in new[] { MaxLineLengthCeiling - 1, MaxLineLengthCeiling })
             {
-                long minimum = MemoryBudget.MinimumViableBudget(parallelism, maxLineLength, ShippedAssumedMeanLineLength);
+                long minimum = MemoryBudget.MinimumViableBudget(parallelism, maxLineLength, MemoryBudget.AssumedMeanLineLength);
 
                 Assert.True(
                     TryCalculate(minimum, parallelism, maxLineLength, out MemoryPlan plan),
@@ -111,7 +85,6 @@ public sealed class MemoryBudgetPropertyTests
                     $"one byte under the minimum is viable: {Describe(minimum - 1, parallelism, maxLineLength)}");
             }
 
-            // And the ceiling is the largest such limit: one more is unviable at any budget.
             Assert.False(
                 TryCalculate(1L << 40, parallelism, MaxLineLengthCeiling + 1, out _),
                 $"a line limit above the ceiling is viable: {Describe(1L << 40, parallelism, MaxLineLengthCeiling + 1)}");
@@ -122,9 +95,6 @@ public sealed class MemoryBudgetPropertyTests
     [Trait("Case", "PB-23")]
     public void A_larger_budget_never_yields_a_smaller_chunk_or_fan_in()
     {
-        // The second budget is the first plus a log-uniform step from a byte to about
-        // 16 GiB: small steps probe the cliffs a pair of unrelated budgets would step
-        // over, large ones probe the regimes between them.
         Gen.Select(Scenario, Gen.Double[0, 34]).Sample(t =>
         {
             ((int parallelism, int maxLineLength, long smaller), double stepExponent) = t;
@@ -157,19 +127,16 @@ public sealed class MemoryBudgetPropertyTests
             return (long)Math.Pow(2, 10 + shape.Position * 28);
         }
 
-        long minimum = MemoryBudget.MinimumViableBudget(parallelism, maxLineLength, AssumedMeanFor(maxLineLength));
+        long minimum = MemoryBudget.MinimumViableBudget(parallelism, maxLineLength, MemoryBudget.AssumedMeanFor(maxLineLength));
         return Math.Min(MaxBudget, (long)(minimum * Math.Pow(2, -0.5 + shape.Position * 7)));
     }
 
-    private static int AssumedMeanFor(int maxLineLength) => Math.Min(ShippedAssumedMeanLineLength, maxLineLength);
-
-    // Only the budget argument is the budget's own failure: any other exception is a
-    // defect in Calculate and has to fail the property rather than count as "rejected".
+    // Any exception other than the budget's own is a Calculate defect and must fail the property.
     private static bool TryCalculate(long budget, int parallelism, int maxLineLength, out MemoryPlan plan)
     {
         try
         {
-            plan = MemoryBudget.Calculate(budget, parallelism, maxLineLength, AssumedMeanFor(maxLineLength));
+            plan = MemoryBudget.Calculate(budget, parallelism, maxLineLength, MemoryBudget.AssumedMeanFor(maxLineLength));
             return true;
         }
         catch (ArgumentOutOfRangeException ex) when (ex.ParamName == "budgetBytes")

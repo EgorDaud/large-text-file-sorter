@@ -464,7 +464,7 @@ The descriptor overhead is easy to forget and is not negligible. A chunk of shor
 
 ### Unit 10: The startup capacity precheck
 
-**Responsibility.** Before any work begins, decide whether there is enough free temporary space to complete the run, and fail immediately with a clear message if there is not. The requirement is roughly twice the input size, since run files hold a full copy of the data and an intermediate merge pass may hold another. The arithmetic and the decision are separate from the mechanism that probes free space, so the decision is a pure function of an input size and a reported free-space figure and is unit testable without touching a volume. `--temp` and the output file can live on two different volumes, so `CapacityProbe` checks both: `EvaluateSameVolume` (twice the input, plus a small margin) when they resolve to the same volume, and `Evaluate` (temp) plus `EvaluateOutputVolume` (roughly one input size, plus the same margin) separately when they do not.
+**Responsibility.** Before any work begins, decide whether there is enough free temporary space to complete the run, and fail immediately with a clear message if there is not. The requirement is roughly twice the input size, since run files hold a full copy of the data and an intermediate merge pass may hold another. The arithmetic and the decision are separate from the mechanism that probes free space, so the decision is a pure function of an input size and a reported free-space figure and is unit testable without touching a volume. `--temp` and the output file can live on two different volumes, so `VolumeCapacity` checks both: `EvaluateSameVolume` (twice the input, plus a small margin) when they resolve to the same volume, and `Evaluate` (temp) plus `EvaluateOutputVolume` (roughly one input size, plus the same margin) separately when they do not.
 
 **Behaviours that must hold.** A comfortable surplus proceeds without comment. A shortfall fails before the first byte is read, naming the required amount, the available amount, and the directory examined. The check never silently proceeds on a shortfall, and never blocks a run that would have fitted. The multiplier is a deliberately conservative upper bound rather than an exact prediction: a run that produces a single run needs closer to one times the input, because that run is moved rather than rewritten, and a run needing several merge passes still never holds more than the input plus one pass in flight.
 
@@ -518,7 +518,7 @@ That last point has a testing consequence worth stating: because generated numbe
 
 ### Generator output placement tests (GW)
 
-**Scope.** `tests/TestFileGenerator.Tests/OutputPlacementTests.cs`, driving `Program.WriteToOutput` directly -- `Main` is a private entry point and cannot be driven from a test the way the sorter's own `Program.RunAsync` can, so this method carries the whole write-then-replace behaviour `Main` delegates to. The generator's own output follows the same staging-and-move rule as the sorter's: write under a private staging name beside the requested output, move that staging file over the output only once writing finished without error, and on failure delete only the staging file.
+**Scope.** `tests/TestFileGenerator.Tests/OutputPlacementTests.cs`, driving `StagedOutput.Write` directly -- `Main` is a private entry point and cannot be driven from a test the way the sorter's own `Program.RunAsync` can, so this method carries the whole write-then-replace behaviour `Main` delegates to. The generator's own output follows the same staging-and-move rule as the sorter's: write under a private staging name beside the requested output, move that staging file over the output only once writing finished without error, and on failure delete only the staging file.
 
 | ID | Test name | Input | Expected outcome |
 |---|---|---|---|
@@ -538,7 +538,7 @@ Three tiers are specified here: property-based, integration, and streaming-layer
 
 **Scope.** `tests/FileSorter.Tests/Properties/`. Random inputs, generated and shrunk by CsCheck (see the README's "Testing" section for the dependency decision), driven through the real composed pipeline or the real production types the unit tier already exercises individually. This tier proves the composition, not the parts: that the parser, the splitter, the comparator, and the merge agree with each other about the cases nobody sat down and wrote by hand.
 
-**The independent oracle.** PB-01 and PB-02 are checked against `NaiveReferenceSort` (`tests/FileSorter.Tests/Properties/NaiveReferenceSort.cs`), written directly from the settled contract table at the top of this document and deliberately referencing none of `FileSorter.LineFormat` -- no `LineOrder`, `LineParser`, `LineCursor`, or `LineDescriptor`. A comparator sharing a defect with its own oracle produces identical wrong output on both sides and the property passes while proving nothing; that tautology is easy to reach by accident, which is why the independence is stated here rather than assumed. PB-03 through PB-05 are different in kind: they test `LineOrder` itself, the same way OC-09 through OC-11 do, so calling it directly is correct there, not a lapse in independence.
+**The independent oracle.** PB-01 and PB-02 are checked against `NaiveReferenceSort` (`tests/FileSorter.Tests/Support/NaiveReferenceSort.cs`), written directly from the settled contract table at the top of this document and deliberately referencing none of `FileSorter.LineFormat` -- no `LineOrder`, `LineParser`, `LineCursor`, or `LineDescriptor`. A comparator sharing a defect with its own oracle produces identical wrong output on both sides and the property passes while proving nothing; that tautology is easy to reach by accident, which is why the independence is stated here rather than assumed. PB-03 through PB-05 are different in kind: they test `LineOrder` itself, the same way OC-09 through OC-11 do, so calling it directly is correct there, not a lapse in independence.
 
 `NaiveReferenceSort`'s own line splitting is a thin wrapper over `NaiveLineFormat` (PB-10 and PB-11's own splitter oracle), not a second, separately written reading of the same end-of-file rule: two oracles disagreeing about where a file's last line ends would still be independent of production, and would still make PB-01, PB-02 and PB-13 fail for a reason that has nothing to do with the sorter. PB-15 through PB-18 pin `NaiveReferenceSort`'s end-of-file handling directly, and PB-01, PB-02 and PB-13 now draw the generated file's own final-line termination from `LineEntryGen.FinalTermination` (the same four shapes `RandomLineFileGen` builds for the splitter sweeps) rather than always the plain `'\n'` a fixed test builder would default to, so the disagreement the oracle used to have with production on this exact point is now inside what those three properties actually exercise. `NaiveLineFormat` is by this point the test suite's single source of the end-of-file splitting rule: PB-10 and PB-11 pin it against the real `ChunkReader`/`RunCursor`, and PB-15 through PB-18 pin it against the documented contract directly, so every other test-side reading of the rule is one of those two, not a third.
 
@@ -595,7 +595,7 @@ Three tiers are specified here: property-based, integration, and streaming-layer
 | IT-06 | Sorting a file beginning with a byte order mark sorts correctly | A UTF-8 BOM, then several ordinary lines | Output matches the oracle; the mark is not part of the first line's number or string part |
 | IT-07 | The capacity precheck against the real temp volume reports Sufficient | `TempCapacity.Evaluate` fed a real `DriveInfo.AvailableFreeSpace` reading for the machine running the suite, against a trivially small input size | Outcome is `Sufficient` |
 | IT-08 | Placing a single run across two genuinely different volumes falls back to a copy | A small single-run input, `--temp` and the output path on two different real drive roots, detected and confirmed writable at run time | Exit 0; output correct; no leftover `run-*.tmp` in the temp directory |
-| IT-09 | The capacity precheck treats a UNC share as unknown instead of throwing | `CapacityProbe.CheckCapacity` given a UNC-shaped `--temp` and output directory (`\\nonexistent-host-for-test\share\sub`); Windows only, skipped elsewhere | Returns no exit code, so the sort proceeds; the stderr warning says free space could not be determined; no exception |
+| IT-09 | The capacity precheck treats a UNC share as unknown instead of throwing | `VolumeCapacity.Check` given a UNC-shaped `--temp` and output directory (`\\nonexistent-host-for-test\share\sub`); Windows only, skipped elsewhere | Returns no exit code, so the sort proceeds; the stderr warning says free space could not be determined; no exception |
 
 ---
 
@@ -617,7 +617,7 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 
 ### Startup ownership tests (TR)
 
-**Scope.** `tests/FileSorter.Tests/Startup/TemporaryRunSetTests.cs`. `TemporaryRunSet` touches the real file system directly and has no seam to substitute, so its existing, untraited cases already use a real scratch directory: creating and deleting run paths, tolerating a file already gone by the time `Dispose` runs, and leaving a pre-existing or non-empty `--temp` directory in place. The cases below are the ones added for the private per-invocation namespace: nothing a plain `run-########.tmp` name in the requested directory used to guarantee once two invocations, or an unrelated file, could share it.
+**Scope.** `tests/FileSorter.Tests/Infrastructure/TemporaryRunSetTests.cs`. `TemporaryRunSet` touches the real file system directly and has no seam to substitute, so its existing, untraited cases already use a real scratch directory: creating and deleting run paths, tolerating a file already gone by the time `Dispose` runs, and leaving a pre-existing or non-empty `--temp` directory in place. The cases below are the ones added for the private per-invocation namespace: nothing a plain `run-########.tmp` name in the requested directory used to guarantee once two invocations, or an unrelated file, could share it.
 
 | ID | Test name | Input | Expected outcome |
 |---|---|---|---|
@@ -631,7 +631,7 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 
 ### Console run tests (CR)
 
-**Scope.** `tests/FileSorter.Tests/Startup/ConsoleRunTests.cs`, driving `ConsoleRun.Run` -- the wrapper `Main` and `VerifyCommand` share for Ctrl+C and SIGTERM wiring and the exception-to-exit-code ladder -- with bodies that throw. No real signal is delivered: the first-request-cancels and second-request-terminates policy is three lines of `CancelKeyPress` and `PosixSignalRegistration` plumbing that a test process cannot exercise without taking itself down, so only the mapping is pinned here, and the policy is checked by reading.
+**Scope.** `tests/FileSorter.Tests/Cli/ConsoleRunTests.cs`, driving `ConsoleRun.Run` -- the wrapper `Main` and `VerifyCommand` share for Ctrl+C and SIGTERM wiring and the exception-to-exit-code ladder -- with bodies that throw. No real signal is delivered: the first-request-cancels and second-request-terminates policy is three lines of `CancelKeyPress` and `PosixSignalRegistration` plumbing that a test process cannot exercise without taking itself down, so only the mapping is pinned here, and the policy is checked by reading.
 
 | ID | Test name | Input | Expected outcome |
 |---|---|---|---|
@@ -646,7 +646,7 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 
 ### Progress-wrapper tests (PR)
 
-**Scope.** `tests/FileSorter.Tests/Startup/ProgressReporterTests.cs`, driving `ProgressReporter.RunWithProgressAsync` -- the wrapper both phase drivers (and `Program`, for phase two) use to run work beside its periodic reporter -- with a stand-in reporter. The stand-in records whether it was started, cancelled and finished, and takes a moment to finish after cancellation, so it has finished by the time the call returns only if the wrapper awaited it. The real reporters' output is covered by the end-to-end tests' stderr assertions.
+**Scope.** `tests/FileSorter.Tests/Infrastructure/ProgressReporterTests.cs`, driving `ProgressReporter.RunWithProgressAsync` -- the wrapper both phase drivers (and `Program`, for phase two) use to run work beside its periodic reporter -- with a stand-in reporter. The stand-in records whether it was started, cancelled and finished, and takes a moment to finish after cancellation, so it has finished by the time the call returns only if the wrapper awaited it. The real reporters' output is covered by the end-to-end tests' stderr assertions.
 
 | ID | Test name | Input | Expected outcome |
 |---|---|---|---|
@@ -672,7 +672,7 @@ SL-03 to SL-05 share one shape. One fake spill blocks on an uncompleted `TaskCom
 
 ### End-to-end tests (ET)
 
-**Scope.** `tests/FileSorter.Tests/EndToEnd/SortRoundTripTests.cs`. Real files, driven through `Program.RunAsync` exactly as `Main` drives it, the same discipline the integration tier (above) uses. The file's older cases -- an empty input, a single-run input, a forced multi-pass merge, both pipelines producing byte-identical output, cancellation leaving no temp files, and the malformed-line diagnostic -- carry no case IDs of their own. The ET identifiers below name the cases in the file that do.
+**Scope.** `tests/FileSorter.Tests/EndToEnd/` (`SortRoundTripTests`, `SortTempCleanupTests` and `SortFailureTests`, sharing `SortHarness`). Real files, driven through `Program.RunAsync` exactly as `Main` drives it, the same discipline the integration tier (above) uses. The file's older cases -- an empty input, a single-run input, a forced multi-pass merge, both pipelines producing byte-identical output, cancellation leaving no temp files, and the malformed-line diagnostic -- carry no case IDs of their own. The ET identifiers below name the cases in the file that do.
 
 | ID | Test name | Input | Expected outcome |
 |---|---|---|---|

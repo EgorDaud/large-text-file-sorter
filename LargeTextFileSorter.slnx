@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/FileSorter/FileSorter.csproj" />
+    <Project Path="src/Shared/Shared.csproj" />
     <Project Path="src/TestFileGenerator/TestFileGenerator.csproj" />
   </Folder>
   <Folder Name="/tests/">

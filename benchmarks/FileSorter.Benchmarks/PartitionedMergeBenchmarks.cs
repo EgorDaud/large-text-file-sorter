@@ -1,28 +1,23 @@
 using BenchmarkDotNet.Attributes;
+using FileSorter.Infrastructure;
 using FileSorter.Merging;
+using FileSorter.Planning;
 using FileSorter.RunGeneration;
-using FileSorter.Startup;
 
 namespace FileSorter.Benchmarks;
 
-// Measures MergeExecutor with 1, 2, 4, or 8 forced merge workers. Every row keeps the
-// eight-worker plan's window and fan-in, then lowers only its worker count. GlobalSetup
-// asserts each lower worker count stays within the planned memory budget.
-// MergeExecutor consumes its run files, so setup rewrites them and creates an executor for
-// every iteration. Each iteration has one invocation.
+// Every row keeps the eight-worker plan's window and fan-in and forces only MergeParallelism down.
 [MemoryDiagnoser]
 [SimpleJob(launchCount: 2, warmupCount: 5, iterationCount: 20, invocationCount: 1)]
 public class PartitionedMergeBenchmarks
 {
-    // Matches MergeBenchmarks input generation; only the merge plan varies.
     private const long InputSizeBytes = 128L * 1024 * 1024;
     private const long GenerationMemoryBudgetBytes = 8L * 1024 * 1024;
     private const int MaxLineLength = 4096;
-    private const int AssumedMeanLineLength = 32;
+
     private const int Seed = 20260906;
     private const int GenerationParallelism = 4;
 
-    // Sized so MemoryBudget.Calculate selects eight merge workers; GlobalSetup verifies it.
     private const long MergePlanBudgetBytes = 256L * 1024 * 1024;
     private const int MergePlanParallelism = 8;
 
@@ -31,7 +26,6 @@ public class PartitionedMergeBenchmarks
     private string _tempRoot = string.Empty;
     private string _runTemplateRoot = string.Empty;
 
-    // Rewritten for every iteration because MergeExecutor consumes its inputs.
     private byte[][] _runTemplateBytes = [];
 
     private TemporaryRunSet? _iterationRuns;
@@ -44,27 +38,25 @@ public class PartitionedMergeBenchmarks
     [GlobalSetup]
     public async Task GlobalSetupAsync()
     {
-        _tempRoot = Path.Combine(Path.GetTempPath(), "FileSorter.Benchmarks.PartitionedMerge", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tempRoot);
+        _tempRoot = ScratchDirectory.Create("FileSorter.Benchmarks.PartitionedMerge");
         _runTemplateRoot = Path.Combine(_tempRoot, "template");
         Directory.CreateDirectory(_runTemplateRoot);
 
         _generationPlan = MemoryBudget.Calculate(
-            GenerationMemoryBudgetBytes, GenerationParallelism, MaxLineLength, AssumedMeanLineLength);
+            GenerationMemoryBudgetBytes, GenerationParallelism, MaxLineLength, MemoryBudget.AssumedMeanLineLength);
 
         _mergePlanAt8 = MemoryBudget.Calculate(
-            MergePlanBudgetBytes, MergePlanParallelism, MaxLineLength, AssumedMeanLineLength);
+            MergePlanBudgetBytes, MergePlanParallelism, MaxLineLength, MemoryBudget.AssumedMeanLineLength);
 
         if (_mergePlanAt8.MergeParallelism != MergePlanParallelism)
         {
             throw new InvalidOperationException(
                 $"Expected MemoryBudget.Calculate({MergePlanBudgetBytes}, {MergePlanParallelism}, {MaxLineLength}, " +
-                $"{AssumedMeanLineLength}) to give MergeParallelism {MergePlanParallelism}, but got " +
+                $"{MemoryBudget.AssumedMeanLineLength}) to give MergeParallelism {MergePlanParallelism}, but got " +
                 $"{_mergePlanAt8.MergeParallelism}. MergePlanBudgetBytes needs raising (see this class's own comment " +
                 "for the arithmetic).");
         }
 
-        // Verify every lower worker count remains within the eight-worker budget.
         foreach (int workers in (int[])[1, 2, 4, 8])
         {
             MemoryPlan forced = _mergePlanAt8 with { MergeParallelism = workers };
@@ -79,7 +71,6 @@ public class PartitionedMergeBenchmarks
 
         byte[] data = SyntheticInput.Generate(InputSizeBytes, Seed);
 
-        // Generate equivalent real run files outside timing.
         using MemoryStream input = new(data, writable: false);
         using TemporaryRunSet templateRuns = new(_runTemplateRoot);
         BufferPool pool = new(_generationPlan.ChunkSize, _generationPlan.DescriptorCapacity, _generationPlan.PoolCapacity);
@@ -106,13 +97,9 @@ public class PartitionedMergeBenchmarks
     [GlobalCleanup]
     public void GlobalCleanup()
     {
-        if (Directory.Exists(_tempRoot))
-        {
-            Directory.Delete(_tempRoot, recursive: true);
-        }
+        ScratchDirectory.Delete(_tempRoot);
     }
 
-    // Rebuild consumed run files synchronously because BenchmarkDotNet setup is synchronous.
     [IterationSetup]
     public void IterationSetup()
     {
@@ -134,7 +121,6 @@ public class PartitionedMergeBenchmarks
     [IterationCleanup]
     public void IterationCleanup()
     {
-        // Dispose cleans any inputs left by a failed iteration.
         _iterationRuns?.Dispose();
 
         if (File.Exists(_iterationOutputPath))
@@ -143,7 +129,6 @@ public class PartitionedMergeBenchmarks
         }
     }
 
-    // Uses the production MergeExecutor path, including range partitioning.
     [Benchmark]
     public async Task Partitioned()
     {

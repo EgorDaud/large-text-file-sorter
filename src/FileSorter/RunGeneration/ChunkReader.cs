@@ -3,12 +3,9 @@ using FileSorter.LineFormat;
 
 namespace FileSorter.RunGeneration;
 
-// Holds a delivered slot and a prefetched slot. Every prefetch fills [Reserve, BufferSize)
-// before parsing reveals the preceding chunk's carry, which overlaps I/O and parsing.
+// A prefetch fills [Reserve, BufferSize) before the previous chunk's carry is known; the carry lands just below Reserve.
 internal sealed class ChunkReader : IAsyncDisposable
 {
-    private const byte CarriageReturn = (byte)'\r';
-
     [SuppressMessage(
         "Usage", "CA2213:Disposable fields should be disposed",
         Justification = "The caller owns this stream. RunGenerationDriver declares it before the reader " +
@@ -18,37 +15,22 @@ internal sealed class ChunkReader : IAsyncDisposable
     private readonly BufferPool _pool;
     private readonly int _maxLineLength;
 
-    // Reserve holds a partial line and a possible trailing CR (maxLineLength + 1 bytes),
-    // plus one byte so a prefetched slot always has room for fresh data.
     private readonly int _reserve;
 
-    // Descriptor exhaustion can leave more than one partial line. Preserve displaced
-    // prefetched bytes here because the input stream cannot reread them.
+    // Carry larger than Reserve (descriptor exhaustion) displaces prefetched bytes; the stream cannot reread them.
     private readonly byte[] _pending;
     private int _pendingLength;
 
-    // Each ordinary fill has this fixed size. Exhaustion is decided from the matching
-    // fill, because a look-ahead fill can finish first. Rebuilt prefetches are excluded.
     private readonly int _fillAmount;
 
-    // Prefetched slot state: folded carry, valid-span start, and fresh-byte count.
-    private PooledBuffer? _prefetchSlot;
-    private int _prefetchCarryLength;
-    private int _prefetchSpanStart;
-    private Task<int>? _prefetchFillTask;
-
-    // A rebuilt prefetch reports retained bytes, not an I/O count; a short value then
-    // does not mean end of stream because remaining bytes are in _pending.
-    private bool _prefetchCountIsCapped;
+    private Prefetch? _prefetch;
 
     public ChunkReader(Stream input, BufferPool pool, int maxLineLength)
     {
-        _reserve = maxLineLength + 2;
+        _reserve = maxLineLength + LineCursor.WindowSlack;
 
-        // The fixed fresh-fill region must leave at least one byte.
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(pool.BufferSize, _reserve, nameof(pool));
 
-        // A zero-capacity descriptor array would produce empty chunks forever.
         ArgumentOutOfRangeException.ThrowIfLessThan(pool.DescriptorCapacity, 1, nameof(pool));
 
         _input = input;
@@ -63,18 +45,13 @@ internal sealed class ChunkReader : IAsyncDisposable
 
     public async ValueTask<Chunk?> ReadNextAsync(CancellationToken ct)
     {
-        if (_prefetchSlot is null)
+        if (_prefetch is null)
         {
-            // The first fill has no predecessor to overlap, but uses the same region.
             PooledBuffer first = await _pool.AcquireAsync(ct);
             try
             {
                 int firstRead = await FillAsync(first.Bytes, _reserve, first.Bytes.Length - _reserve, ct);
-                _prefetchSlot = first;
-                _prefetchCarryLength = 0;
-                _prefetchSpanStart = _reserve;
-                _prefetchFillTask = Task.FromResult(firstRead);
-                _prefetchCountIsCapped = false;
+                _prefetch = new Prefetch(first, CarryLength: 0, SpanStart: _reserve, Task.FromResult(firstRead), CountIsCapped: false);
             }
             catch
             {
@@ -83,23 +60,17 @@ internal sealed class ChunkReader : IAsyncDisposable
             }
         }
 
-        PooledBuffer slot = _prefetchSlot.Value;
-        int carryLength = _prefetchCarryLength;
-        int spanStart = _prefetchSpanStart;
-        Task<int> fillTask = _prefetchFillTask!;
-        bool countIsCapped = _prefetchCountIsCapped;
-        _prefetchSlot = null;
-        _prefetchFillTask = null;
+        Prefetch current = _prefetch.Value;
+        PooledBuffer slot = current.Slot;
+        _prefetch = null;
 
         try
         {
-            int freshCount = await fillTask;
+            int freshCount = await current.FillTask;
             BytesConsumed += freshCount;
-            int totalBytes = carryLength + freshCount;
+            int totalBytes = current.CarryLength + freshCount;
 
-            // Use this chunk's fill only. A rebuilt prefetch can be short because carry
-            // consumed its space, while remaining stream data is still pending.
-            bool thisExhausted = !countIsCapped && freshCount < _fillAmount;
+            bool thisExhausted = !current.CountIsCapped && freshCount < _fillAmount;
 
             if (totalBytes == 0)
             {
@@ -107,8 +78,6 @@ internal sealed class ChunkReader : IAsyncDisposable
                 return null;
             }
 
-            // Start the next fill before parsing to overlap the work. The final chunk
-            // releases this speculative slot.
             PooledBuffer next = await _pool.AcquireAsync(ct);
             Task<int> nextFillTask;
             try
@@ -126,53 +95,17 @@ internal sealed class ChunkReader : IAsyncDisposable
             int carryOverLength;
             try
             {
-                long bufferBaseOffset = BytesConsumed - totalBytes;
-                count = 0;
-                LineCursor cursor = new(slot.Bytes.AsSpan(spanStart, totalBytes), _maxLineLength, bufferBaseOffset, LinesRead + 1);
-
-                // Describe uses buffer-relative offsets, while the cursor uses span-relative ones.
-                long fileOffsetOfBufferZero = bufferBaseOffset - spanStart;
-
-                // Descriptors carry slot-relative offsets for sorting and spilling.
-                while (count < slot.Lines.Length && cursor.TryReadLine(out int offset, out int length))
-                {
-                    slot.Lines[count] = Describe(slot.Bytes, spanStart + offset, length, fileOffsetOfBufferZero, LinesRead + count + 1);
-                    count++;
-                }
-
-                carryOffset = spanStart + cursor.CarryOffset;
-                carryOverLength = cursor.CarryLength;
-
-                // Descriptor exhaustion leaves carry-over, even when it contains complete lines.
-                bool stoppedOnCapacity = count == slot.Lines.Length;
-
-                // Only this reader knows the stream ended, so it emits an unterminated tail.
-                // A final bare CR is a terminator, not line content.
-                if (!stoppedOnCapacity && carryOverLength > 0 && thisExhausted)
-                {
-                    bool tailEndsInCarriageReturn = slot.Bytes[carryOffset + carryOverLength - 1] == CarriageReturn;
-                    int finalLength = tailEndsInCarriageReturn ? carryOverLength - 1 : carryOverLength;
-                    if (finalLength > 0)
-                    {
-                        slot.Lines[count] = Describe(slot.Bytes, carryOffset, finalLength, fileOffsetOfBufferZero, LinesRead + count + 1);
-                        count++;
-                    }
-
-                    carryOffset += carryOverLength;
-                    carryOverLength = 0;
-                }
-
+                count = ParseLines(
+                    slot, current.SpanStart, totalBytes, BytesConsumed - totalBytes, thisExhausted,
+                    out carryOffset, out carryOverLength);
                 LinesRead += count;
             }
             catch
             {
-                // This reader still owns next. Preserve the parsing failure while
-                // observing and releasing its speculative fill.
                 await ReleaseUnusedPrefetchDuringUnwindAsync(next, nextFillTask);
                 throw;
             }
 
-            // Fold carry into the prefetched slot, or release it after the final chunk.
             if (!thisExhausted || carryOverLength > 0)
             {
                 await FoldCarryIntoNextAsync(next, nextFillTask, slot.Bytes, carryOffset, carryOverLength);
@@ -186,13 +119,50 @@ internal sealed class ChunkReader : IAsyncDisposable
         }
         catch
         {
-            // The reader still owns this slot when parsing fails.
             slot.Dispose();
             throw;
         }
     }
 
-    // Folds carry into the prefetched slot before its source buffer is sorted in place.
+    private int ParseLines(
+        PooledBuffer slot, int spanStart, int totalBytes, long bufferBaseOffset, bool exhausted,
+        out int carryOffset, out int carryLength)
+    {
+        int count = 0;
+        LineCursor cursor = new(slot.Bytes.AsSpan(spanStart, totalBytes), _maxLineLength, bufferBaseOffset, LinesRead + 1);
+
+        // The cursor's offsets are span-relative; descriptors and Describe are buffer-relative.
+        long fileOffsetOfBufferZero = bufferBaseOffset - spanStart;
+
+        while (count < slot.Lines.Length && cursor.TryReadLine(out int offset, out int length))
+        {
+            slot.Lines[count] = Describe(slot.Bytes, spanStart + offset, length, fileOffsetOfBufferZero, LinesRead + count + 1);
+            count++;
+        }
+
+        carryOffset = spanStart + cursor.CarryOffset;
+        carryLength = cursor.CarryLength;
+
+        // Descriptor exhaustion leaves carry-over, even when it contains complete lines.
+        bool stoppedOnCapacity = count == slot.Lines.Length;
+
+        // A final bare CR is a terminator, not line content.
+        if (!stoppedOnCapacity && carryLength > 0 && exhausted)
+        {
+            int finalLength = LineCursor.UnterminatedTailLength(slot.Bytes.AsSpan(carryOffset, carryLength));
+            if (finalLength > 0)
+            {
+                slot.Lines[count] = Describe(slot.Bytes, carryOffset, finalLength, fileOffsetOfBufferZero, LinesRead + count + 1);
+                count++;
+            }
+
+            carryOffset += carryLength;
+            carryLength = 0;
+        }
+
+        return count;
+    }
+
     private async ValueTask FoldCarryIntoNextAsync(
         PooledBuffer next, Task<int> nextFillTask, byte[] previousBuffer, int carryOffset, int carryLength)
     {
@@ -200,41 +170,30 @@ internal sealed class ChunkReader : IAsyncDisposable
         {
             if (carryLength <= _reserve)
             {
-                // Reserve accepts an ordinary partial line and optional CR without
-                // waiting for the in-flight fill.
                 int spanStart = _reserve - carryLength;
                 if (carryLength > 0)
                 {
                     Array.Copy(previousBuffer, carryOffset, next.Bytes, spanStart, carryLength);
                 }
 
-                _prefetchSlot = next;
-                _prefetchCarryLength = carryLength;
-                _prefetchSpanStart = spanStart;
-                _prefetchFillTask = nextFillTask;
-
-                // An ordinary fill count is comparable to _fillAmount.
-                _prefetchCountIsCapped = false;
+                _prefetch = new Prefetch(next, carryLength, spanStart, nextFillTask, CountIsCapped: false);
                 return;
             }
 
-            // Descriptor exhaustion can leave carry larger than Reserve. Rebuild the
-            // slot around it, then retain any displaced prefetched bytes.
             int read = await nextFillTask;
 
             int keep = Math.Min(read, next.Bytes.Length - carryLength);
             int overflow = read - keep;
             if (overflow > 0)
             {
-                // Preserve displaced bytes from the forward-only stream. Overflow is
-                // bounded by one fill, so _pending has enough space.
+                // Overflow is at most one fill, so _pending is large enough.
                 Array.Copy(next.Bytes, _reserve + keep, _pending, 0, overflow);
                 _pendingLength = overflow;
             }
 
             if (keep > 0)
             {
-                // Copy overflow first because these ranges can overlap.
+                // This move overwrites the overflow bytes, so they must be saved first.
                 Array.Copy(next.Bytes, _reserve, next.Bytes, carryLength, keep);
             }
 
@@ -243,15 +202,7 @@ internal sealed class ChunkReader : IAsyncDisposable
                 Array.Copy(previousBuffer, carryOffset, next.Bytes, 0, carryLength);
             }
 
-            _prefetchSlot = next;
-            _prefetchCarryLength = carryLength;
-            _prefetchSpanStart = 0;
-
-            // Count only retained bytes now; pending bytes count when delivered.
-            _prefetchFillTask = Task.FromResult(keep);
-
-            // A short retained count with overflow is not an EOF signal.
-            _prefetchCountIsCapped = overflow > 0;
+            _prefetch = new Prefetch(next, carryLength, SpanStart: 0, Task.FromResult(keep), CountIsCapped: overflow > 0);
         }
         catch
         {
@@ -260,8 +211,7 @@ internal sealed class ChunkReader : IAsyncDisposable
         }
     }
 
-    // Observes and releases the final speculative fill. Propagate I/O failures so a
-    // failed last read cannot make the sort appear successful.
+    // Must rethrow I/O failures, or a failed last read would let the sort appear successful.
     private static async ValueTask ReleaseUnusedPrefetchAsync(PooledBuffer slot, Task<int> fillTask)
     {
         try
@@ -277,7 +227,6 @@ internal sealed class ChunkReader : IAsyncDisposable
         }
     }
 
-    // During parsing failure, preserve the original exception while releasing this slot.
     private static async ValueTask ReleaseUnusedPrefetchDuringUnwindAsync(PooledBuffer slot, Task<int> fillTask)
     {
         try
@@ -293,7 +242,6 @@ internal sealed class ChunkReader : IAsyncDisposable
         }
     }
 
-    // offset is buffer-relative, so add it to the file offset of buffer position zero.
     private static LineDescriptor Describe(byte[] buffer, int offset, int length, long fileOffsetOfBufferZero, long lineNumber)
     {
         if (!LineDescriptor.TryCreate(buffer, offset, length, out LineDescriptor descriptor))
@@ -305,8 +253,6 @@ internal sealed class ChunkReader : IAsyncDisposable
         return descriptor;
     }
 
-    // Drain bytes already read from the forward-only stream before reading more. Callers
-    // decide exhaustion from their own fill count.
     private async Task<int> FillAsync(byte[] buffer, int destinationOffset, int destinationLength, CancellationToken ct)
     {
         int fromPending = Math.Min(_pendingLength, destinationLength);
@@ -317,7 +263,6 @@ internal sealed class ChunkReader : IAsyncDisposable
             int remainingPending = _pendingLength - fromPending;
             if (remainingPending > 0)
             {
-                // Keep this general if the pending-byte bound changes.
                 Array.Copy(_pending, fromPending, _pending, 0, remainingPending);
             }
 
@@ -332,20 +277,26 @@ internal sealed class ChunkReader : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        // Wait for a fill that still uses this pool slot and input stream.
-        if (_prefetchFillTask is not null)
+        if (_prefetch is not { } prefetch)
         {
-            try
-            {
-                await _prefetchFillTask;
-            }
-            catch
-            {
-            }
+            return;
         }
 
-        _prefetchSlot?.Dispose();
-        _prefetchSlot = null;
-        _prefetchFillTask = null;
+        _prefetch = null;
+
+        // The fill may still be writing into the slot and reading the stream.
+        try
+        {
+            await prefetch.FillTask;
+        }
+        catch
+        {
+        }
+
+        prefetch.Slot.Dispose();
     }
+
+    // CountIsCapped: FillTask reports retained bytes, not an I/O count, so a short value is not EOF; the rest is in _pending.
+    private readonly record struct Prefetch(
+        PooledBuffer Slot, int CarryLength, int SpanStart, Task<int> FillTask, bool CountIsCapped);
 }

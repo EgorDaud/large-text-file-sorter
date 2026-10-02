@@ -1,6 +1,7 @@
 using CsCheck;
 using FileSorter.LineFormat;
 using FileSorter.RunGeneration;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Properties;

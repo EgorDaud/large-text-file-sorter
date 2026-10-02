@@ -2,6 +2,9 @@ namespace FileSorter.LineFormat;
 
 internal ref struct LineCursor
 {
+    // A max-length line carried with its CR but not its LF, plus one fresh byte to find the LF or EOF.
+    public const int WindowSlack = 2;
+
     private const byte LineFeed = (byte)'\n';
     private const byte CarriageReturn = (byte)'\r';
 
@@ -15,17 +18,7 @@ internal ref struct LineCursor
     private int _position;
     private long _linesRead;
 
-    /// <param name="blockBaseOffset">
-    /// File offset of the block, used for diagnostics and BOM detection at offset zero.
-    /// </param>
-    /// <param name="firstLineNumber">File line number of the first line in the block.</param>
-    /// <param name="stripByteOrderMark">
-    /// Strip a UTF-8 BOM only at file offset zero. Disable for sorter-produced files.
-    /// </param>
-    /// <param name="stripCarriageReturn">
-    /// Strip one CR before LF in user input. Disable for runs and output, where CR is content
-    /// and LF alone terminates each line.
-    /// </param>
+    // Disable stripCarriageReturn for runs and output: there CR is content and LF alone terminates a line.
     public LineCursor(
         ReadOnlySpan<byte> block, int maxLineLength, long blockBaseOffset = 0, long firstLineNumber = 1,
         bool stripByteOrderMark = true, bool stripCarriageReturn = true)
@@ -44,6 +37,10 @@ internal ref struct LineCursor
     public int CarryOffset => _position;
     public int CarryLength => _block.Length - _position;
 
+    // A final bare CR at EOF is a terminator, not content.
+    public static int UnterminatedTailLength(ReadOnlySpan<byte> tail) =>
+        tail.Length > 0 && tail[^1] == CarriageReturn ? tail.Length - 1 : tail.Length;
+
     public bool TryReadLine(out int offset, out int length)
     {
         ReadOnlySpan<byte> remaining = _block[_position..];
@@ -51,12 +48,8 @@ internal ref struct LineCursor
 
         if (newline < 0)
         {
-            // Allow one trailing CR beyond the content limit while waiting for LF.
-            // The completed-line check resolves whether it is content; callers handle EOF.
-            // This carry allowance applies even when stripCarriageReturn is false.
-            bool endsInCarriageReturn = remaining.Length > 0 && remaining[^1] == CarriageReturn;
-            int contentLength = endsInCarriageReturn ? remaining.Length - 1 : remaining.Length;
-            if (contentLength > _maxLineLength)
+            // One trailing CR may exceed the limit while its LF is pending, even when CR is not stripped.
+            if (UnterminatedTailLength(remaining) > _maxLineLength)
             {
                 throw BuildException(remaining);
             }

@@ -70,7 +70,7 @@ public sealed class LineDescriptorTests
         List<LineDescriptor> a = DescriptorFixture.Build(withoutTerminator);
         List<LineDescriptor> b = DescriptorFixture.Build(withTerminator);
 
-        Assert.Single(a); // the unterminated tail is carry-over, not a complete line
+        Assert.Single(a);
         AssertReproduces(withTerminator, b[1], "2. Banana");
     }
 
@@ -81,7 +81,7 @@ public sealed class LineDescriptorTests
         List<LineDescriptor> descriptors = DescriptorFixture.Build([]);
 
         Assert.Empty(descriptors);
-        descriptors.Sort((x, y) => LineOrder.Compare(in x, [], in y, [])); // no-op, must not throw
+        descriptors.Sort((x, y) => LineOrder.Compare(in x, [], in y, []));
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public sealed class LineDescriptorTests
     {
         byte[] buffer = "xx\n-5. Apple pie\nyy"u8.ToArray();
         const int offset = 3;
-        const int length = 13; // "-5. Apple pie"
+        const int length = 13;
 
         bool created = LineDescriptor.TryCreate(buffer, offset, length, out LineDescriptor descriptor);
 
@@ -137,7 +137,7 @@ public sealed class LineDescriptorTests
 
         ChunkSorter.Sort(chunk.Buffer.Lines.AsSpan(0, chunk.Count), chunk.Buffer.Bytes);
 
-        Assert.Equal(original, chunk.Buffer.Bytes); // only the descriptor array moved
+        Assert.Equal(original, chunk.Buffer.Bytes);
         chunk.Buffer.Dispose();
     }
 
@@ -187,7 +187,7 @@ public sealed class LineDescriptorTests
         byte[] written = output.ToArray();
 
         Assert.DoesNotContain((byte)'\r', written);
-        Assert.Equal((byte)'\n', written[^1]); // the last line is terminated too
+        Assert.Equal((byte)'\n', written[^1]);
         Assert.Equal(
             ["1. Apple", "2. Banana"],
             Encoding.UTF8.GetString(written).Split('\n', StringSplitOptions.RemoveEmptyEntries));
@@ -215,9 +215,6 @@ public sealed class LineDescriptorTests
         return new Chunk(slot, count);
     }
 
-    // Mirrors ChunkSpiller's write loop against a generic Stream rather than the real
-    // file it always opens, so the chunk-model reconstruction property is testable
-    // without touching disk.
     private static async Task WriteChunkAsync(Chunk chunk, Stream output)
     {
         for (int i = 0; i < chunk.Count; i++)

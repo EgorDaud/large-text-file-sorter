@@ -1,15 +1,11 @@
+using FileSorter.Infrastructure;
 using FileSorter.Merging;
-using FileSorter.Startup;
 using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Merging;
 
-// RunPlacement operates on file paths by nature — the seam it exists behind is tryMove,
-// not the file system — so these tests use a real scratch directory. No test arranges a
-// genuine second volume; the copy fallback is forced by a tryMove of (_, _) => false. In the
-// "Program" collection because KM-17 and KM-22 capture the process-wide Console.Error that
-// the sort tests also swap.
+// Shares the "Program" collection because some tests capture the process-wide Console.Error.
 [Collection("Program")]
 public sealed class RunPlacementTests : IDisposable
 {
@@ -34,9 +30,7 @@ public sealed class RunPlacementTests : IDisposable
         byte[] bytes = [1, 2, 3, 4, 5];
         File.WriteAllBytes(runPath, bytes);
 
-        // The default tryMove performs the real move; Place is then only required to
-        // return. If it went on to copy runPath afterwards, this would throw,
-        // because the move has already made runPath disappear.
+        // A copy after the move would throw, since runPath is already gone.
         RunPlacement.Place(runPath, outputPath, _runs);
 
         Assert.Equal(bytes, File.ReadAllBytes(outputPath));
@@ -63,10 +57,7 @@ public sealed class RunPlacementTests : IDisposable
     [Trait("Case", "KM-17")]
     public void A_run_file_cleanup_failure_after_a_successful_place_leaves_the_replaced_destination_intact()
     {
-        // Windows-only reproduction: FileShare.Read alone permits the concurrent read
-        // Place's own File.Copy performs, but denies the delete that follows once the
-        // destination has already been replaced. That delete is best-effort, so Place
-        // neither throws nor leaves the destination partial.
+        // FileShare.Read permits Place's File.Copy but denies the run's delete afterwards.
         Assert.SkipUnless(OperatingSystem.IsWindows(), "FileShare-based delete denial is a Windows sharing-mode concept.");
 
         string runPath = Path.Combine(_directory.Path, "run.tmp");
@@ -74,19 +65,11 @@ public sealed class RunPlacementTests : IDisposable
         byte[] bytes = [1, 2, 3, 4, 5];
         File.WriteAllBytes(runPath, bytes);
 
-        TextWriter originalError = Console.Error;
-        Console.SetError(new StringWriter());
-        try
+        using (new FileStream(runPath, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            using (new FileStream(runPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-            {
-                Exception? thrown = Record.Exception(() => RunPlacement.Place(runPath, outputPath, _runs, (_, _) => false));
-                Assert.Null(thrown);
-            }
-        }
-        finally
-        {
-            Console.SetError(originalError);
+            (Exception? thrown, _) = ConsoleCapture.Error(
+                () => Record.Exception(() => RunPlacement.Place(runPath, outputPath, _runs, (_, _) => false)));
+            Assert.Null(thrown);
         }
 
         Assert.Equal(bytes, File.ReadAllBytes(outputPath));
@@ -96,8 +79,6 @@ public sealed class RunPlacementTests : IDisposable
     [Trait("Case", "KM-22")]
     public void A_source_run_that_cannot_be_deleted_after_the_copy_fallback_warns_but_neither_fails_nor_leaks_the_run()
     {
-        // A read-only attribute blocks File.Delete only on Windows; File.Copy and the
-        // final move are unaffected. It stands in for a scanner holding the finished run.
         Assert.SkipUnless(OperatingSystem.IsWindows(), "A read-only attribute blocks File.Delete only on Windows.");
 
         string runPath = _runs.CreateRunPath();
@@ -107,28 +88,24 @@ public sealed class RunPlacementTests : IDisposable
         string? privateDirectory = Path.GetDirectoryName(runPath);
         Assert.NotNull(privateDirectory);
 
-        TextWriter originalError = Console.Error;
-        StringWriter capturedError = new();
+        string stderr;
         File.SetAttributes(runPath, FileAttributes.ReadOnly);
-        Console.SetError(capturedError);
         try
         {
-            Exception? thrown = Record.Exception(() => RunPlacement.Place(runPath, outputPath, _runs, (_, _) => false));
+            (Exception? thrown, stderr) = ConsoleCapture.Error(
+                () => Record.Exception(() => RunPlacement.Place(runPath, outputPath, _runs, (_, _) => false)));
             Assert.Null(thrown);
         }
         finally
         {
-            Console.SetError(originalError);
             File.SetAttributes(runPath, FileAttributes.Normal);
             File.SetAttributes(outputPath, FileAttributes.Normal);
         }
 
-        // The output is complete, and the failed delete was reported by name.
         Assert.Equal(bytes, File.ReadAllBytes(outputPath));
-        Assert.Contains(runPath, capturedError.ToString());
+        Assert.Contains(runPath, stderr);
         Assert.True(File.Exists(runPath));
 
-        // The run stays tracked, so Dispose retries it once the block is lifted.
         _runs.Dispose();
         Assert.False(File.Exists(runPath));
         Assert.False(Directory.Exists(privateDirectory));
@@ -166,10 +143,7 @@ public sealed class RunPlacementTests : IDisposable
     [Trait("Case", "KM-21")]
     public void A_failed_final_move_in_the_copy_fallback_leaves_the_existing_destination_untouched_and_deletes_only_the_staging_file()
     {
-        // Windows-only reproduction: a destination held open for read with delete
-        // sharing denies the write access File.Move needs to replace it, without
-        // denying the delete a plain rename would use. A Unix rename does not
-        // distinguish these cases, so nothing here would fail on Linux the same way.
+        // Read|Delete sharing denies the write access File.Move needs to replace the destination.
         Assert.SkipUnless(OperatingSystem.IsWindows(), "FileShare-based write denial is a Windows sharing-mode concept.");
 
         string runPath = Path.Combine(_directory.Path, "run.tmp");
@@ -180,8 +154,9 @@ public sealed class RunPlacementTests : IDisposable
 
         using (new FileStream(outputPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
         {
-            Assert.Throws<UnauthorizedAccessException>(
+            DestinationReplaceFailedException thrown = Assert.Throws<DestinationReplaceFailedException>(
                 () => RunPlacement.Place(runPath, outputPath, _runs, (_, _) => false));
+            Assert.IsType<UnauthorizedAccessException>(thrown.InnerException);
         }
 
         Assert.Equal(previousContent, File.ReadAllBytes(outputPath));
@@ -226,7 +201,6 @@ public sealed class RunPlacementTests : IDisposable
     [Trait("Case", "KM-24")]
     public void PlaceEmpty_throws_for_an_unreplaceable_destination_and_leaves_it_and_no_staging_file()
     {
-        // Same Windows-only write denial as KM-21. Program maps this exception to exit 3.
         Assert.SkipUnless(OperatingSystem.IsWindows(), "FileShare-based write denial is a Windows sharing-mode concept.");
 
         string outputPath = Path.Combine(_directory.Path, "output.tmp");
@@ -235,10 +209,52 @@ public sealed class RunPlacementTests : IDisposable
 
         using (new FileStream(outputPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
         {
-            Assert.Throws<UnauthorizedAccessException>(() => RunPlacement.PlaceEmpty(outputPath));
+            DestinationReplaceFailedException thrown = Assert.Throws<DestinationReplaceFailedException>(
+                () => RunPlacement.PlaceEmpty(outputPath));
+            Assert.IsType<UnauthorizedAccessException>(thrown.InnerException);
         }
 
         Assert.Equal(previousContent, File.ReadAllBytes(outputPath));
+        Assert.Empty(Directory.GetFiles(_directory.Path, "*.partial"));
+    }
+
+    [Fact]
+    [Trait("Case", "KM-25")]
+    public void A_failed_copy_stays_a_plain_IO_error_and_leaves_the_destination_untouched()
+    {
+        // A missing source stands in for a copy failure such as a full disk.
+        string runPath = Path.Combine(_directory.Path, "missing-run.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
+        byte[] previousContent = [9, 9, 9];
+        File.WriteAllBytes(outputPath, previousContent);
+
+        Exception thrown = Assert.ThrowsAny<IOException>(
+            () => RunPlacement.Place(runPath, outputPath, _runs, (_, _) => false));
+
+        Assert.IsNotType<DestinationReplaceFailedException>(thrown);
+        Assert.Equal(previousContent, File.ReadAllBytes(outputPath));
+        Assert.Empty(Directory.GetFiles(_directory.Path, "*.partial"));
+    }
+
+    [Fact]
+    [Trait("Case", "KM-26")]
+    public void An_existing_destination_is_replaced_by_renaming_the_run_rather_than_copying_it()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Creation time is settable and preserved by rename only on Windows.");
+
+        string runPath = Path.Combine(_directory.Path, "run.tmp");
+        string outputPath = Path.Combine(_directory.Path, "output.tmp");
+        File.WriteAllBytes(outputPath, [0, 0, 0]);
+        byte[] bytes = [1, 2, 3];
+        File.WriteAllBytes(runPath, bytes);
+        DateTime marker = new(2001, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+        File.SetCreationTimeUtc(runPath, marker);
+
+        RunPlacement.Place(runPath, outputPath, _runs);
+
+        Assert.Equal(bytes, File.ReadAllBytes(outputPath));
+        Assert.Equal(marker, File.GetCreationTimeUtc(outputPath));
+        Assert.False(File.Exists(runPath));
         Assert.Empty(Directory.GetFiles(_directory.Path, "*.partial"));
     }
 }

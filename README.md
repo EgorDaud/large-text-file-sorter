@@ -73,8 +73,9 @@ The first Ctrl+C or SIGTERM cancels the run and exits 130 after cleanup; a secon
 Vertical slices: every folder is named for a feature and holds everything that feature needs, so a change touches one folder. No folder is named for a technical layer.
 
 ```
-src/FileSorter/   Program.cs (dispatch), Startup/ (arguments, budget arithmetic,
-                  free-space precheck, temp lifetime, Ctrl+C and exit codes), LineFormat/
+src/FileSorter/   Program.cs (dispatch), Cli/ (arguments, free-space precheck, Ctrl+C and
+                  exit codes), Planning/ (budget and capacity arithmetic), Infrastructure/
+                  (temp lifetime, progress, unbuffered streams), LineFormat/
                   (parser, cursor, comparator), RunGeneration/ (chunk read, radix sort,
                   spill, buffer pool, both pipelines), Merging/ (loser tree, splitters,
                   pass planner, placement), Verification/ (--verify's two scans)

@@ -2,19 +2,16 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using Akka.Actor;
-using Akka.Configuration;
 using Akka.Streams;
+using FileSorter.Cli;
+using FileSorter.Infrastructure;
 using FileSorter.Merging;
+using FileSorter.Planning;
 using FileSorter.RunGeneration;
-using FileSorter.Startup;
 
 namespace FileSorter.Benchmarks;
 
-// Console modes that measure peak managed heap at a fixed memory budget over several input
-// sizes. Each size runs in a fresh worker process because input generation changes GC
-// bookkeeping. The parent generates input; the worker measures only the sorting pipeline.
-// Every size runs once per run-generation pipeline (Channels and Akka), each in its own worker,
-// so a memory regression in either pipeline is caught.
+// Each (size, pipeline) runs in a fresh worker process because generating input in-process skews GC bookkeeping.
 internal static class FlatnessRunner
 {
     private static readonly (string Label, long Bytes)[] Sizes =
@@ -30,19 +27,17 @@ internal static class FlatnessRunner
         ("1 GiB", 1L * 1024 * 1024 * 1024),
     ];
 
-    // Fixed budget for the single-worker matrix.
     internal const long MemoryBudgetBytes = 16L * 1024 * 1024;
 
-    // Budget selected to give two merge workers; the worker reports the actual plan.
+    // Chosen so the plan gets two merge workers.
     internal const long ParallelMergeMemoryBudgetBytes = 64L * 1024 * 1024;
 
     internal const int MaxLineLength = 4096;
-    internal const int AssumedMeanLineLength = 32;
+
     internal const int Parallelism = 4;
     internal const int SampleIntervalMilliseconds = 5;
     private const int Seed = 424242;
 
-    // Allows GC bookkeeping noise while still flagging large growth.
     private const double TolerancePercent = 60.0;
 
     public static async Task<int> RunAsync() =>
@@ -57,8 +52,7 @@ internal static class FlatnessRunner
     private static async Task<int> RunMatrixAsync(
         string description, long memoryBudgetBytes, (string Label, long Bytes)[] sizes)
     {
-        string tempRoot = Path.Combine(Path.GetTempPath(), "FileSorter.Benchmarks.Flatness", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempRoot);
+        string tempRoot = ScratchDirectory.Create("FileSorter.Benchmarks.Flatness");
 
         Pipeline[] pipelines = [Pipeline.Channels, Pipeline.Akka];
         List<(Pipeline Pipeline, string Label, long InputBytes, long PeakBytes, int MergeParallelism)> results = [];
@@ -66,7 +60,6 @@ internal static class FlatnessRunner
         {
             foreach ((string label, long bytes) in sizes)
             {
-                // One input per size, shared by both pipelines; each pipeline still gets its own process.
                 string inputPath = await WriteInputAsync(tempRoot, label, bytes);
                 foreach (Pipeline pipeline in pipelines)
                 {
@@ -82,10 +75,9 @@ internal static class FlatnessRunner
         }
         finally
         {
-            Directory.Delete(tempRoot, recursive: true);
+            ScratchDirectory.Delete(tempRoot);
         }
 
-        // Each matrix must report the same merge parallelism for every size and pipeline.
         int matrixMergeParallelism = results[0].MergeParallelism;
         bool consistentMergeParallelism = results.All(r => r.MergeParallelism == matrixMergeParallelism);
 
@@ -126,7 +118,6 @@ internal static class FlatnessRunner
         return flat && consistentMergeParallelism ? 0 : 1;
     }
 
-    // Generate input in the parent so worker sampling excludes generation churn.
     private static async Task<string> WriteInputAsync(string tempRoot, string label, long targetBytes)
     {
         string inputPath = Path.Combine(tempRoot, $"input-{label.Replace(' ', '_')}.txt");
@@ -145,7 +136,7 @@ internal static class FlatnessRunner
         ProcessStartInfo startInfo = BuildWorkerStartInfo(inputPath, outputPath, runsDirectory, memoryBudgetBytes, pipeline);
         using Process worker = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start the flatness worker process.");
 
-        // Drain both pipes concurrently to avoid blocking the child on a full error pipe.
+        // Drain both pipes concurrently, or the child can block on a full stderr pipe.
         Task<string> stdoutTask = worker.StandardOutput.ReadToEndAsync();
         Task<string> stderrTask = worker.StandardError.ReadToEndAsync();
         await Task.WhenAll(stdoutTask, stderrTask);
@@ -165,7 +156,6 @@ internal static class FlatnessRunner
             throw new InvalidOperationException($"The flatness worker process for {label} printed unparseable output: '{stdout}'.");
         }
 
-        // Stderr carries the plan diagnostic; stdout remains a single peak value.
         int mergeParallelism = ParseMergeParallelism(stderr, label);
 
         return (peakBytes, mergeParallelism);
@@ -188,7 +178,6 @@ internal static class FlatnessRunner
             $"The flatness worker process for {label} did not print its '{Prefix}' diagnostic on stderr. stderr:\n{stderr}");
     }
 
-    // Relaunches the current executable or its managed assembly under dotnet.
     private static ProcessStartInfo BuildWorkerStartInfo(
         string inputPath, string outputPath, string runsDirectory, long memoryBudgetBytes, Pipeline pipeline)
     {
@@ -216,7 +205,6 @@ internal static class FlatnessRunner
         return startInfo;
     }
 
-    // Worker protocol: one peak value on stdout and merge parallelism on stderr.
     public static async Task<int> RunWorkerAsync(
         string inputPath, string outputPath, string runsDirectory, long memoryBudgetBytes, Pipeline pipeline)
     {
@@ -228,23 +216,19 @@ internal static class FlatnessRunner
         using PeakMemorySampler sampler = new(SampleIntervalMilliseconds);
         using TemporaryRunSet runs = new(runsDirectory);
 
-        MemoryPlan plan = MemoryBudget.Calculate(memoryBudgetBytes, Parallelism, MaxLineLength, AssumedMeanLineLength);
+        MemoryPlan plan = MemoryBudget.Calculate(memoryBudgetBytes, Parallelism, MaxLineLength, MemoryBudget.AssumedMeanLineLength);
         Console.Error.WriteLine($"MergeParallelism={plan.MergeParallelism}");
 
-        // Mirrors the sorter's strategy selection in Program.cs: the ActorSystem exists only for Akka and
-        // lives as long as the sort. Its startup cost is inside the sampled window.
-        using ActorSystem? system = pipeline is Pipeline.Akka ? CreateQuietActorSystem() : null;
+        using ActorSystem? system = pipeline is Pipeline.Akka ? AkkaRunGeneration.CreateQuietSystem("flatness") : null;
         RunGenerationStrategy strategy = system is null
             ? ChannelRunGeneration.RunAsync
-            : CreateAkkaStrategy(system.Materializer());
+            : AkkaRunGeneration.Strategy(system.Materializer());
 
         IReadOnlyList<string> runPaths = await GenerateRunsAsync(inputPath, plan, runs, strategy);
 
         if (runPaths.Count == 0)
         {
-            using (File.Create(outputPath))
-            {
-            }
+            RunPlacement.PlaceEmpty(outputPath);
         }
         else if (runPaths.Count == 1)
         {
@@ -267,26 +251,16 @@ internal static class FlatnessRunner
     private static async Task<IReadOnlyList<string>> GenerateRunsAsync(
         string inputPath, MemoryPlan plan, TemporaryRunSet runs, RunGenerationStrategy strategy)
     {
-        // Match the production asynchronous input configuration.
         using FileStream input = new(
-            inputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: MemoryBudget.UnbufferedStream,
+            inputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: FileStreams.Unbuffered,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
         BufferPool pool = new(plan.ChunkSize, plan.DescriptorCapacity, plan.PoolCapacity);
 
-        // Dispose the reader before its input stream.
         await using ChunkReader reader = new(input, pool, MaxLineLength);
         ChunkSpiller spiller = new(runs, plan.SpillBufferSize);
 
         return await strategy(reader, spiller.SpillAsync, Parallelism, CancellationToken.None);
     }
 
-    // The sorter builds this inline in Program.Main, so it is repeated here rather than extracted from src/.
-    private static ActorSystem CreateQuietActorSystem() =>
-        ActorSystem.Create(
-            "flatness",
-            ConfigurationFactory.ParseString("akka.loglevel = OFF\nakka.stdout-loglevel = OFF"));
-
-    private static RunGenerationStrategy CreateAkkaStrategy(IMaterializer materializer) =>
-        (reader, spill, parallelism, token) => AkkaRunGeneration.RunAsync(reader, spill, parallelism, materializer, token);
 }

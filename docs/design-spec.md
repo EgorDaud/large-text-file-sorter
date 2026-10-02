@@ -40,21 +40,27 @@ FileSorter/
   Program.cs                      dispatch (--help, --verify, sort mode), startup validation, the
                                   pipeline branch (the ActorSystem exists only in the akka branch),
                                   and RunPhasesAsync: run generation, then placement or merge
-  Startup/
+  Cli/
     CommandLine.cs                sort-mode argument parsing, and the size-suffix parser verify mode reuses
     ConsoleRun.cs                 Ctrl+C and SIGTERM wiring, and the exception-to-exit-code ladder
                                   shared by sort and verify
     ExitCodes.cs                  the process exit code constants
-    CapacityProbe.cs              output-directory and --temp validation, the free-space probe
-    ProgressReporter.cs           the byte-count formatter, the reporting interval, and RunWithProgressAsync,
-                                  which runs a phase beside its periodic reporter
+    Preflight.cs                  output-directory and --temp validation
+    VolumeCapacity.cs             the free-space probe and the same-volume check
+    PreflightException.cs         a sort that cannot start: message and exit code
     SorterOptions.cs
+  Planning/
     MemoryBudget.cs               MemoryPlan Calculate(...), and TryCalculate(...) for the CLI path
     MemoryPlan.cs
     TempCapacity.cs               CapacityDecision Evaluate(...) and its two volume-specific forms
+  Infrastructure/
     TemporaryRunSet.cs            temp file creation and cleanup, used by both phases
+    ProgressReporter.cs           the byte-count formatter, the reporting interval, and RunWithProgressAsync,
+                                  which runs a phase beside its periodic reporter
+    FileStreams.cs                the Unbuffered bufferSize every FileStream passes (D12)
   LineFormat/
     LineDescriptor.cs
+    RunHead.cs                    the merge's view of one run's current line; sized by MemoryPlan
     LineCursor.cs                 line boundaries, terminators, carry-over, length limit
     LineParser.cs                 the line grammar
     LineOrder.cs                  the three-level comparator
@@ -103,9 +109,9 @@ TestFileGenerator/
     FileWriter.cs                 the loop that drives LineComposer into a Stream
 ```
 
-`TemporaryRunSet` sits in `Startup/` beside `TempCapacity` because the temporary directory is one concern with one owner: the capacity check decides whether it can hold the run, and the run set creates and deletes everything inside it. Both phases receive it; neither owns it.
+`TemporaryRunSet` sits in `Infrastructure/` because both phases and the merge's staging files depend on it, and nothing it needs lives above it. The capacity check in `Planning/` decides whether the directory can hold the run; the run set creates and deletes everything inside it. Both phases receive it; neither owns it.
 
-`Startup`, `LineFormat`, `RunGeneration`, `Merging` and `Generation` are features. There is no `Services`, `Models`, `Interfaces`, `Helpers`, `Common` or `Utils` folder anywhere, and no folder is named after a test tier. Test projects mirror the production folders name for name, plus a top-level `EndToEnd/` for the property and integration tiers.
+`Cli`, `Planning`, `LineFormat`, `RunGeneration`, `Merging` and `Generation` are features; `Infrastructure` holds the three small IO pieces they all share. Dependencies run one way: `LineFormat` and `Infrastructure` depend on nothing, `Planning` on `LineFormat`, `RunGeneration` and `Merging` on those three, and `Cli` and `Verification` on top. There is no `Services`, `Models`, `Interfaces`, `Helpers`, `Common` or `Utils` folder anywhere, and no folder is named after a test tier. Test projects mirror the production folders name for name, plus a top-level `EndToEnd/` for the property and integration tiers.
 
 Almost every type is `internal`; these are two utilities, not a library with a public API. Tests reach them through `InternalsVisibleTo`.
 
@@ -186,7 +192,7 @@ internal readonly record struct MemoryPlan(
         2L * ReadAheadBufferSize + (long)ReadAheadDescriptorCapacity * DescriptorSize;
 
     // KWayMerge.LoserTree's own per-slot cost, read via Unsafe.SizeOf rather than a literal.
-    public static int LoserTreeBytesPerFanInSlot => Unsafe.SizeOf<KWayMerge.RunHead>() + sizeof(int);
+    public static int LoserTreeBytesPerFanInSlot => Unsafe.SizeOf<RunHead>() + sizeof(int);
     public const int PartitionOffsetEntrySize = sizeof(long);
 
     public long MergeMetadataBytes =>
@@ -391,7 +397,7 @@ internal sealed class ChunkSpiller
 
 Every slot handed to the spiller is released by the spiller, on both paths; together with `ChunkReader`'s `catch`, that is the whole release discipline.
 
-The run file is opened with `MemoryBudget.UnbufferedStream` (`bufferSize: 1`) like every read stream (D12): the `FileStream` buffers nothing, and a staging array sized at `SpillBufferSize` takes its place, each line and its terminator copied in and one `WriteAsync` issued per full buffer. Nothing else buffers a *write* the way a read-ahead buffer already buffers a read, which is why the staging array gets a budgeted allocation.
+The run file is opened with `FileStreams.Unbuffered` (`bufferSize: 1`) like every read stream (D12): the `FileStream` buffers nothing, and a staging array sized at `SpillBufferSize` takes its place, each line and its terminator copied in and one `WriteAsync` issued per full buffer. Nothing else buffers a *write* the way a read-ahead buffer already buffers a read, which is why the staging array gets a budgeted allocation.
 
 The run's final size is known before the first byte is written — the sum of each sorted line's length plus its terminator — so `SetLength` is called immediately after opening, turning a file grown 64 KiB at a time into one allocation. That is safe only because the total is exact by construction and checked: `SpillAsync` compares the stream's `Position` against it once every line is staged and throws on a mismatch, because a wrong-length run reads as a truncated last line rather than failing loudly.
 
@@ -807,9 +813,9 @@ internal static class TempCapacity
 }
 ```
 
-A pure decision, separate from the free-space probe `CapacityProbe` performs once. The requirement is twice the input size: run files hold a full copy and a merge pass in progress holds part of another before its inputs are deleted. The multiplier is a deliberately conservative upper bound, and `MergeExecutor`'s per-group deletion is what keeps actual usage well inside it.
+A pure decision, separate from the free-space probe `VolumeCapacity` performs once. The requirement is twice the input size: run files hold a full copy and a merge pass in progress holds part of another before its inputs are deleted. The multiplier is a deliberately conservative upper bound, and `MergeExecutor`'s per-group deletion is what keeps actual usage well inside it.
 
-The nullable `freeBytes` is what makes SC-05 a unit test rather than a branch buried in `CapacityProbe`: a volume that does not report free space yields `Unknown`, and the rule is to proceed with a stated warning. Treating an unreported figure as zero would block every run on such volumes, which is a self-inflicted outage.
+The nullable `freeBytes` is what makes SC-05 a unit test rather than a branch buried in `VolumeCapacity`: a volume that does not report free space yields `Unknown`, and the rule is to proceed with a stated warning. Treating an unreported figure as zero would block every run on such volumes, which is a self-inflicted outage.
 
 ### 8.3 TemporaryRunSet
 
@@ -867,7 +873,7 @@ Numbers are written in canonical decimal with no leading zeros, so generated dat
 
 Composition is separable from writing: `LineComposer` writes into a caller-supplied span and `FileWriter` takes a `Stream`, so sizing and composition are testable against a `MemoryStream`.
 
-**The generator's own output follows the sorter's staging rule.** `Program.WriteToOutput`, not `FileWriter.Write`, opens a uniquely named staging file beside the requested output, writes to it, and moves it into place only once the write returns without error. `CreateStagingPath` and its cleanup are a deliberate duplicate of `Merging/StagingFile`'s — same retry count on a name collision, same report-rather-than-swallow rule — rather than a shared reference, because the two programs share no project. A failure to replace the requested output this way is reported by name at exit 3 rather than left to crash unhandled.
+**The generator's own output follows the sorter's staging rule.** `StagedOutput.Write`, not `FileWriter.Write`, opens a uniquely named staging file beside the requested output, writes to it, and moves it into place only once the write returns without error. `CreateStagingPath` and its cleanup are a deliberate duplicate of `Merging/StagingFile`'s — same retry count on a name collision, same report-rather-than-swallow rule — rather than a shared reference, because the two programs share no project. A failure to replace the requested output this way is reported by name at exit 3 rather than left to crash unhandled.
 
 ---
 
@@ -920,14 +926,14 @@ Cancellation in the sorter: `ConsoleRun` cancels the token on the first `Console
 | Unit 7, the multi-pass merge planner | `Merging/MergePlanner.Plan` |
 | Unit 7, MP-10, predicted versus actual pass count | `Merging/MergeExecutor.ExecuteAsync`, `PassesExecuted` |
 | Unit 8, the buffer pool | `RunGeneration/BufferPool`, `PooledBuffer` |
-| Unit 9, the memory budget calculator | `Startup/MemoryBudget.Calculate`, validated through `MemoryPlan` |
-| Unit 10, the startup capacity precheck | `Startup/TempCapacity.Evaluate` and its two volume-specific forms |
+| Unit 9, the memory budget calculator | `Planning/MemoryBudget.Calculate`, validated through `MemoryPlan` |
+| Unit 10, the startup capacity precheck | `Planning/TempCapacity.Evaluate` and its two volume-specific forms |
 | Unit 11, the generator's composition and sizing | `Generation/LineComposer.TryComposeNext` |
-| Temp file cleanup on both paths | `Startup/TemporaryRunSet` |
+| Temp file cleanup on both paths | `Infrastructure/TemporaryRunSet` |
 | Streaming-layer tier (SL) | `RunGeneration/RunGenerationStrategy`, run twice |
 | Property-based tier (PB) | `tests/FileSorter.Tests/Properties/`, over the types above and `Program.RunAsync` |
 | Integration and end-to-end tiers (IT, ET) | `tests/FileSorter.Tests/Integration/` and `EndToEnd/` |
-| Byte-identity oracle | `tests/FileSorter.Tests/Properties/NaiveReferenceSort`, independently written, must not call `LineOrder` |
+| Byte-identity oracle | `tests/FileSorter.Tests/Support/NaiveReferenceSort`, independently written, must not call `LineOrder` |
 | Verify tests (VF) | `Verification/OutputVerifier.RunAsync`, `VerifyCommand.RunAsync` |
 
 ---
@@ -945,9 +951,9 @@ Cancellation in the sorter: `ConsoleRun` cancels the token on the first `Console
 | D7 | The benchmark reports Channels as the baseline and Akka.Streams as a percentage against it | A skeptical reviewer reads it in that direction |
 | D8 | Run order from a strategy is undefined | Both schedulers complete out of order; `MergeExecutor` treats the list as a set |
 | D9 | A pool slot owns both the byte buffer and the descriptor array; a chunk ends when either fills | Otherwise the descriptor array is a per-chunk LOH allocation and peak working set is a function of GC behaviour rather than configuration. Turns `assumedMeanLineLength` from a correctness assumption into a tuning parameter — one whose value decides, per chunk, which of `ChunkReader`'s two carry paths runs |
-| D10 | `MergeExecutor` drives the passes and owns intermediate runs; `TemporaryRunSet` lives in `Startup/` and is shared by both phases | Something has to execute a multi-pass plan, and temporary files belong to both phases rather than to phase one alone |
+| D10 | `MergeExecutor` drives the passes and owns intermediate runs; `TemporaryRunSet` lives in `Infrastructure/` and is shared by both phases | Something has to execute a multi-pass plan, and temporary files belong to both phases rather than to phase one alone |
 | D11 | The holder releases: `ChunkReader` disposes a slot it never hands on, `ChunkSpiller` disposes every slot it receives | Any other rule leaks a slot when the reader throws on a malformed line, which is a guaranteed path on bad input rather than an edge case |
-| D12 | Every READ stream is opened with `MemoryBudget.UnbufferedStream` (`bufferSize: 1`); WRITE streams too, with a budgeted staging array (`SpillBufferSize`, `OutputBufferSize`) coalescing each line and its terminator instead. Phase two's buffers are allocated once in `MergeExecutor` and passed in | A `FileStream` buffer under an existing read-ahead buffer is unbudgeted work done twice. That argument is read-only: nothing buffers a write the way a read-ahead buffer buffers a read, so an unbuffered write stream alone would cost two syscalls per line. The staging buffer does that coalescing instead, which is what lets both sides stay unbuffered |
+| D12 | Every READ stream is opened with `FileStreams.Unbuffered` (`bufferSize: 1`); WRITE streams too, with a budgeted staging array (`SpillBufferSize`, `OutputBufferSize`) coalescing each line and its terminator instead. Phase two's buffers are allocated once in `MergeExecutor` and passed in | A `FileStream` buffer under an existing read-ahead buffer is unbudgeted work done twice. That argument is read-only: nothing buffers a write the way a read-ahead buffer buffers a read, so an unbuffered write stream alone would cost two syscalls per line. The staging buffer does that coalescing instead, which is what lets both sides stay unbuffered |
 | D13 | A strategy surfaces the first branch failure as the original exception, unwrapped; the streaming tier asserts exception-type identity across both | Otherwise `Parallel.ForEachAsync`'s `AggregateException` and Akka's fault route give the same corrupt file different exit codes. `await` unwraps the Channels path for free; it is Akka's materialized task that needs the explicit peel |
 | D14 | `Program` owns the single-run branch; `MergeExecutor` takes no `tryMove` | A parameter threaded two levels for one branch's benefit, and MP-05 already describes the single run as bypassing the merge entirely |
 | D15 | `FileWriter.Write` takes an optional `Action<long>? onProgress` | Progress on stderr is required for both programs; it is the seam the write loop reports through. A hundred gigabytes is several silent minutes otherwise. Amended: `Write` also takes a `CancellationToken`, polled with the progress report, so the generator can return 130 (see the exit-code prose) |
