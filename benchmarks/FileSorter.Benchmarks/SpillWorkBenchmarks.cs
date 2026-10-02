@@ -1,10 +1,10 @@
 using Akka.Actor;
-using Akka.Configuration;
 using Akka.Streams;
 using BenchmarkDotNet.Attributes;
+using FileSorter.Infrastructure;
 using FileSorter.LineFormat;
+using FileSorter.Planning;
 using FileSorter.RunGeneration;
-using FileSorter.Startup;
 
 namespace FileSorter.Benchmarks;
 
@@ -17,7 +17,7 @@ public class SpillWorkBenchmarks
     private const long InputSizeBytes = 8L * 1024 * 1024;
     private const long MemoryBudgetBytes = 2L * 1024 * 1024;
     private const int MaxLineLength = 4096;
-    private const int AssumedMeanLineLength = 32;
+
     private const int Seed = 12345;
 
     private static readonly byte[] LineTerminator = [(byte)'\n'];
@@ -36,7 +36,6 @@ public class SpillWorkBenchmarks
     [Params(1, 4)]
     public int Parallelism { get; set; }
 
-    // Sort releases the chunk; write persists it unsorted.
     [Params("sort", "write")]
     public string Work { get; set; } = "sort";
 
@@ -44,12 +43,10 @@ public class SpillWorkBenchmarks
     public void GlobalSetup()
     {
         _data = SyntheticInput.Generate(InputSizeBytes, Seed);
-        _tempRoot = Path.Combine(Path.GetTempPath(), "FileSorter.Benchmarks", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tempRoot);
-        _plan = MemoryBudget.Calculate(MemoryBudgetBytes, Parallelism, MaxLineLength, AssumedMeanLineLength);
+        _tempRoot = ScratchDirectory.Create("FileSorter.Benchmarks");
+        _plan = MemoryBudget.Calculate(MemoryBudgetBytes, Parallelism, MaxLineLength, MemoryBudget.AssumedMeanLineLength);
 
-        Config quiet = ConfigurationFactory.ParseString("akka.loglevel = OFF\nakka.stdout-loglevel = OFF");
-        _system = ActorSystem.Create("sorter-benchmark-spill-work", quiet);
+        _system = AkkaRunGeneration.CreateQuietSystem("sorter-benchmark-spill-work");
         _materializer = _system.Materializer();
     }
 
@@ -58,10 +55,7 @@ public class SpillWorkBenchmarks
     {
         _system?.Dispose();
 
-        if (Directory.Exists(_tempRoot))
-        {
-            Directory.Delete(_tempRoot, recursive: true);
-        }
+        ScratchDirectory.Delete(_tempRoot);
     }
 
     [IterationSetup]
@@ -83,7 +77,6 @@ public class SpillWorkBenchmarks
         _stream?.Dispose();
     }
 
-    // Sort and release the chunk without writing it.
     private static Task<string> SortOnlySpillAsync(Chunk chunk, CancellationToken ct)
     {
         try
@@ -97,7 +90,6 @@ public class SpillWorkBenchmarks
         }
     }
 
-    // Write input-order lines without sorting.
     private async Task<string> WriteOnlySpillAsync(Chunk chunk, CancellationToken ct)
     {
         try

@@ -1,5 +1,7 @@
 using System.Runtime.ExceptionServices;
 using Akka;
+using Akka.Actor;
+using Akka.Configuration;
 using Akka.Streams;
 using Akka.Streams.Dsl;
 using Akka.Util;
@@ -8,23 +10,24 @@ namespace FileSorter.RunGeneration;
 
 internal static class AkkaRunGeneration
 {
+    public static ActorSystem CreateQuietSystem(string name) =>
+        ActorSystem.Create(name, ConfigurationFactory.ParseString("akka.loglevel = OFF\nakka.stdout-loglevel = OFF"));
+
+    public static RunGenerationStrategy Strategy(IMaterializer materializer) =>
+        (reader, spill, parallelism, ct) => RunAsync(reader, spill, parallelism, materializer, ct);
+
     public static async Task<IReadOnlyList<string>> RunAsync(
         ChunkReader reader, ChunkSpill spill, int parallelism, IMaterializer materializer, CancellationToken ct)
     {
-        // The graph can finish while reads and spills it started are still running.
-        // Cancel and join that work before returning because the caller then disposes
-        // the reader, pool, and temporary-run registry. ChunkReader owns any look-ahead fill.
+        // The graph can finish while its reads and spills still run; join them before the
+        // caller disposes the reader, pool, and run registry.
         using CancellationTokenSource abort = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        // UnfoldAsync awaits one read before starting the next, so this tracks the only
-        // outstanding ReadNextAsync task without retaining a task per chunk.
+        // UnfoldAsync never overlaps reads, so this is the only outstanding one.
         Task? reading = null;
 
-        // Spills run concurrently. Count them so tracking stays bounded by parallelism.
         SpillCount spills = new();
 
-        // The reader keeps its position, so NotUsed is only UnfoldAsync state. A null
-        // chunk becomes Option.None and completes the source.
         async Task<Option<(NotUsed, Chunk)>> ReadNextAsync(NotUsed state)
         {
             Chunk? chunk = await reader.ReadNextAsync(abort.Token);
@@ -38,9 +41,8 @@ internal static class AkkaRunGeneration
             return pending;
         }
 
-        // Move synchronous sorting and file setup off the fused stage's actor thread.
-        // Task.Run must start even after cancellation so SpillAsync can release the pool slot;
-        // SpillAsync itself observes abort. Count the spill before starting it and until it ends.
+        // Task.Run keeps the synchronous sort off the actor thread. It must start even after
+        // cancellation (CancellationToken.None) so SpillAsync releases the pool slot.
         async Task<string> StartSpill(Chunk chunk)
         {
             spills.Enter();
@@ -54,8 +56,6 @@ internal static class AkkaRunGeneration
             }
         }
 
-        // Stop and join work started by the graph. Ignore a read failure here because
-        // the graph failure, or its cancellation, is already being propagated.
         async Task DrainAsync()
         {
             await abort.CancelAsync();
@@ -82,8 +82,7 @@ internal static class AkkaRunGeneration
         }
         catch (AggregateException ex) when (ex.InnerExceptions.Count > 0)
         {
-            // RunWith preserves a stage failure in AggregateException. Expose the inner
-            // exception so both run-generation strategies have the same failure contract.
+            // RunWith wraps stage failures; unwrap to match the other strategy's failure contract.
             ExceptionDispatchInfo.Capture(ex.InnerExceptions[0]).Throw();
             throw;
         }
@@ -93,8 +92,7 @@ internal static class AkkaRunGeneration
         }
     }
 
-    // Tracks active spills without retaining completed tasks. The idle latch is created
-    // after the graph stops because zero can be a gap between chunks while it is running.
+    // The idle latch is created only after the graph stops: while it runs, zero can be a gap between chunks.
     private sealed class SpillCount
     {
         private readonly Lock _gate = new();
@@ -120,7 +118,6 @@ internal static class AkkaRunGeneration
             }
         }
 
-        // Called after the graph stops, when the mapper can no longer add spills.
         public Task WaitForIdleAsync()
         {
             lock (_gate)

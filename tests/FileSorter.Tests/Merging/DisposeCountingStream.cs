@@ -2,11 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace FileSorter.Tests.Merging;
 
-/// A pass-through <see cref="Stream"/> that counts how many times each disposal path is
-/// actually invoked, shared by <c>RunSliceStreamTests</c> and
-/// <c>OutputSliceStreamTests</c>. A plain <see cref="MemoryStream"/> cannot catch a
-/// double dispose, because its own <c>Dispose</c> is idempotent and calling it twice
-/// looks identical to calling it once. This wrapper makes the call count observable.
+// MemoryStream.Dispose is idempotent, so only a call count can reveal a double dispose.
 internal sealed class DisposeCountingStream(Stream inner) : Stream
 {
     public int DisposeCount { get; private set; }
@@ -48,10 +44,7 @@ internal sealed class DisposeCountingStream(Stream inner) : Stream
         base.Dispose(disposing);
     }
 
-    // Deliberately does not call base.DisposeAsync(): Stream's default implementation
-    // calls Dispose() synchronously, which would run this class's Dispose(true) override
-    // a second time and both count and dispose inner twice for one logical disposal,
-    // defeating the one thing this fixture exists to count accurately.
+    // Not base.DisposeAsync(): Stream's default calls Dispose(), which would count and dispose inner twice.
     [SuppressMessage(
         "Usage", "CA2215:Dispose methods should call base class dispose",
         Justification = "See the method comment: calling it would double-count and " +

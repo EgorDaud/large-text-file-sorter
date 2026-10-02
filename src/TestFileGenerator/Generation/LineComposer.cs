@@ -3,25 +3,16 @@ using System.Globalization;
 
 namespace TestFileGenerator.Generation;
 
-/// Composes complete lines into a caller-supplied span.
-/// Shared parts come from a fixed pool. Other parts include a unique token so accidental
-/// duplicates do not raise the configured ratio.
-///
-/// With a positive ratio, the first two lines share a part whenever either candidate pair
-/// fits. Both candidate pairs are always drawn, so later seeded output stays reproducible.
-/// A zero ratio produces distinct string parts only.
+// Unshared parts end in a unique token so accidental duplicates never inflate the configured ratio.
 internal sealed class LineComposer
 {
     private const byte Separator = (byte)'.';
     private const byte Space = (byte)' ';
     private const byte Terminator = (byte)'\n';
 
-    // Bounds used to size every composition buffer.
     private const int MaxNumberDigits = 19;
     private const int MaxTokenBytes = 13;
     private const int MaxWordsPerStringPart = 4;
-
-    // Shared parts come from this fixed pool.
     private const int SharedStringPartCount = 64;
 
     private static ReadOnlySpan<byte> Base36Digits => "0123456789abcdefghijklmnopqrstuvwxyz"u8;
@@ -34,11 +25,8 @@ internal sealed class LineComposer
     private readonly byte[] _shortestSharedStringPart;
 
     private long _nextToken;
-
-    // The forced pair can only occupy the first two lines.
     private bool _forcedPairAttempted;
 
-    // Hold the second forced line until the next call and recheck its remaining budget.
     private long? _pendingPairNumber;
     private byte[]? _pendingPairStringPart;
     private int _pendingPairLength;
@@ -55,14 +43,12 @@ internal sealed class LineComposer
         _shortestSharedStringPart = ShortestOf(_sharedStringParts);
     }
 
-    /// Longest generated line, including its terminator.
     public static int MaxComposedLineLength =>
         MaxNumberDigits + 2 + MaxStringPartBytes + 1;
 
     private static int MaxStringPartBytes =>
         (MaxWordsPerStringPart * (Vocabulary.LongestWordBytes + 1)) + MaxTokenBytes;
 
-    /// Composes the next complete line. Returns false when it would exceed the remaining size.
     public bool TryComposeNext(Span<byte> destination, long remainingBytes, out int written)
     {
         if (destination.Length < MaxComposedLineLength)
@@ -72,7 +58,6 @@ internal sealed class LineComposer
                 nameof(destination));
         }
 
-        // A reserved second line must still fit this call's budget.
         if (_pendingPairStringPart is { } pendingStringPart)
         {
             if (_pendingPairLength > remainingBytes)
@@ -97,7 +82,7 @@ internal sealed class LineComposer
             }
         }
 
-        // Draw before sizing so a target changes only where output stops.
+        // Draw before checking the budget, so the target changes only where output stops.
         bool shareStringPart = _random.NextDouble() < _duplicateRatio;
         long number = NextNumber();
 
@@ -119,8 +104,7 @@ internal sealed class LineComposer
         return true;
     }
 
-    /// Reserves an ordinary or minimal shared pair for the first two lines. Both candidates
-    /// are drawn to keep later seeded output independent of the target size.
+    // Both candidate pairs are always drawn, so later seeded output does not depend on the target.
     private bool TryReserveForcedPair(Span<byte> destination, long remainingBytes, out int written)
     {
         byte[] ordinaryStringPart = _sharedStringParts[_random.Next(_sharedStringParts.Length)];
@@ -140,7 +124,6 @@ internal sealed class LineComposer
             return true;
         }
 
-        // Use the smallest shared pair when the ordinary pair does not fit.
         long fallbackFirstLength = ComposedLineLength(fallbackFirstNumber, _shortestSharedStringPart);
         long fallbackSecondLength = ComposedLineLength(fallbackSecondNumber, _shortestSharedStringPart);
         if (fallbackFirstLength + fallbackSecondLength <= remainingBytes)
@@ -186,7 +169,7 @@ internal sealed class LineComposer
 
     private long NextNumber()
     {
-        // Choose a width first so values cover every decimal width.
+        // Width first: a uniform long would almost always have 18 or 19 digits.
         int digits = _random.Next(1, MaxNumberDigits + 1);
         long lowest = digits == 1 ? 0 : PowersOfTen[digits - 1];
         long exclusiveUpperBound = digits == MaxNumberDigits ? long.MaxValue : PowersOfTen[digits];
@@ -221,7 +204,6 @@ internal sealed class LineComposer
         return chosen.Length;
     }
 
-    /// Renders value in base 36, shortest form.
     private static int WriteToken(Span<byte> destination, long value)
     {
         Span<byte> token = stackalloc byte[MaxTokenBytes];
@@ -265,8 +247,7 @@ internal sealed class LineComposer
         return shortest;
     }
 
-    /// Size of the smallest forced shared pair for this vocabulary and seed.
-    internal long MinimalForcedPairByteLength => 2 * ComposedLineLength(0, _shortestSharedStringPart);
+    public long MinimalForcedPairByteLength => 2 * ComposedLineLength(0, _shortestSharedStringPart);
 
     private static long[] BuildPowersOfTen()
     {

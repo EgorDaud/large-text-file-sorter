@@ -19,8 +19,7 @@ internal static class ChannelRunGeneration
             CancellationToken = ct,
         }, async (chunk, token) => paths.Add(await spill(chunk, token)));
 
-        // A failed consumer stops draining the bounded channel. Complete it so a blocked
-        // producer wakes, releases its resources, and propagates the failure.
+        // A failed consumer stops draining; completing the channel wakes a producer blocked on WriteAsync.
         _ = consume.ContinueWith(
             static (faulted, state) => ((Channel<Chunk>)state!).Writer.TryComplete(faulted.Exception),
             channel,
@@ -30,8 +29,6 @@ internal static class ChannelRunGeneration
 
         try
         {
-            // WhenAll reports by task order, so RootCause restores a consumer failure
-            // hidden by the producer's ChannelClosedException.
             await Task.WhenAll(produce, consume);
         }
         catch (Exception ex)
@@ -42,11 +39,9 @@ internal static class ChannelRunGeneration
         return paths.ToArray();
     }
 
-    // Prefer the consumer failure when it caused the producer's channel to close.
+    // WhenAll surfaces the producer's ChannelClosedException first; the consumer holds the real failure.
     private static Exception RootCause(Exception surfaced, Task consume)
     {
-        // This ChannelClosedException is a consequence of the continuation above;
-        // the consumer has the original failure.
         if (surfaced is ChannelClosedException && consume.Exception?.Flatten().InnerExceptions[0] is { } consumerFailure)
         {
             return consumerFailure;
@@ -68,7 +63,7 @@ internal static class ChannelRunGeneration
                 }
                 catch
                 {
-                    // This chunk never reached a consumer, so return its pool slot.
+                    // Never reached a consumer, so nobody else will return its pool slot.
                     chunk.Buffer.Dispose();
                     throw;
                 }
@@ -81,7 +76,6 @@ internal static class ChannelRunGeneration
         }
         finally
         {
-            // ReadAllAsync needs completion on both success and failure.
             writer.TryComplete(failure);
         }
     }

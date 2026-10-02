@@ -1,22 +1,23 @@
+using FileSorter.Infrastructure;
+using Shared;
+
 namespace FileSorter.Merging;
 
 internal static class RunPlacement
 {
-    // If a move cannot cross volumes, copy to a staging file beside outputPath, then move
-    // it into place. A failure leaves outputPath unchanged or fully replaced. Delete the
-    // source last, so cleanup failure cannot leave a partial destination.
-    public static void Place(string runPath, string outputPath, Func<string, string, bool> tryMove)
+    public static void Place(string runPath, string outputPath, TemporaryRunSet runs, Func<string, string, bool>? tryMove = null)
     {
-        if (tryMove(runPath, outputPath))
-        {
-            return;
-        }
-
         string staging = StagingFile.CreatePath(outputPath);
+        bool copied = false;
         try
         {
-            File.Copy(runPath, staging, overwrite: false);
-            File.Move(staging, outputPath, overwrite: true);
+            if (!(tryMove ?? TryMove)(runPath, staging))
+            {
+                File.Copy(runPath, staging, overwrite: false);
+                copied = true;
+            }
+
+            ReplaceDestination(staging, outputPath);
         }
         catch
         {
@@ -24,6 +25,55 @@ internal static class RunPlacement
             throw;
         }
 
-        File.Delete(runPath);
+        if (copied)
+        {
+            runs.Delete(runPath);
+        }
+    }
+
+    public static void PlaceEmpty(string outputPath)
+    {
+        string staging = StagingFile.CreatePath(outputPath);
+        try
+        {
+            using (new FileStream(staging, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+            }
+
+            ReplaceDestination(staging, outputPath);
+        }
+        catch
+        {
+            StagingFile.Delete(staging);
+            throw;
+        }
+    }
+
+    // Only this rename's failure is the destination's fault; staging-write failures stay plain I/O.
+    private static void ReplaceDestination(string staging, string outputPath)
+    {
+        try
+        {
+            File.Move(staging, outputPath, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new DestinationReplaceFailedException(outputPath, ex);
+        }
+    }
+
+    // A cross-volume move can throw after copying, leaving a file at the staging path.
+    private static bool TryMove(string from, string to)
+    {
+        try
+        {
+            File.Move(from, to);
+            return true;
+        }
+        catch (IOException)
+        {
+            StagingFile.Delete(to);
+            return false;
+        }
     }
 }

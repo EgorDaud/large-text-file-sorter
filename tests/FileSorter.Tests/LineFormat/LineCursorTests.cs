@@ -40,8 +40,6 @@ public sealed class LineCursorTests
     [Trait("Case", "CB-03")]
     public void Reading_a_line_spanning_more_than_two_reads_emits_it_once_intact()
     {
-        // Within the limit throughout: each partial carry stays under maxLineLength,
-        // which is the property this case exists to pin, not merely the final result.
         const int maxLineLength = 40;
         string longString = new('X', 30);
         byte[] whole = Encoding.UTF8.GetBytes($"9. {longString}\n");
@@ -155,8 +153,6 @@ public sealed class LineCursorTests
 
         bool found = cursor.TryReadLine(out int offset, out int length);
 
-        // The cursor's only notion of "malformed" is the length-limit exception; the
-        // mark contributes no bytes to whatever is reported, throw or not.
         Assert.True(found);
         Assert.Equal(3, offset);
         Assert.Equal(0, length);
@@ -168,7 +164,7 @@ public sealed class LineCursorTests
     public void Reading_a_line_one_byte_beyond_the_limit_is_malformed_at_the_limit()
     {
         const int maxLineLength = 20;
-        byte[][] blocks = [new byte[8], new byte[8], new byte[5]]; // 21 bytes, no terminator anywhere
+        byte[][] blocks = [new byte[8], new byte[8], new byte[5]];
         Array.Fill(blocks[0], (byte)'A');
         Array.Fill(blocks[1], (byte)'B');
         Array.Fill(blocks[2], (byte)'C');
@@ -218,7 +214,7 @@ public sealed class LineCursorTests
     public void Reading_a_line_one_byte_inside_the_limit_spanning_several_reads_is_accepted()
     {
         const int maxLineLength = 40;
-        string content = new('Y', 36); // one byte short of the limit once "9. " is added
+        string content = new('Y', 36);
         byte[] whole = Encoding.UTF8.GetBytes($"9. {content}\n");
 
         byte[][] blocks = [whole[..10], whole[10..20], whole[20..]];
@@ -232,32 +228,23 @@ public sealed class LineCursorTests
     [Trait("Case", "CB-17")]
     public void Reading_a_block_ending_exactly_on_the_carriage_return_of_a_maximum_length_crlf_line_carries_it_rather_than_throwing()
     {
-        // The no-newline branch must bound the content alone, not the raw carry: the
-        // trailing CR is a terminator byte whose other half has not arrived yet, so it
-        // must not count against maxLineLength. Bounding the raw carry instead rejects
-        // a legal maxLineLength-byte \r\n line whenever a fill boundary lands on its CR.
         const int maxLineLength = 8;
-        byte[] block = "1. abcde\r"u8.ToArray(); // content "1. abcde" is exactly maxLineLength bytes
+        byte[] block = "1. abcde\r"u8.ToArray();
         LineCursor cursor = new(block, maxLineLength);
 
         bool found = cursor.TryReadLine(out _, out _);
 
-        Assert.False(found); // carried, not thrown
+        Assert.False(found);
         Assert.Equal(0, cursor.CarryOffset);
-        Assert.Equal(9, cursor.CarryLength); // the full 9 bytes, CR included
+        Assert.Equal(9, cursor.CarryLength);
     }
 
     [Fact]
     [Trait("Case", "CB-18")]
     public void Reading_a_crlf_line_whose_content_already_exceeds_the_limit_still_throws_once_terminated()
     {
-        // The other side of the case above: excluding a trailing, still-unterminated CR
-        // from the no-newline branch's bound must not loosen the terminated branch,
-        // which excludes the CR from contentEnd before comparing against maxLineLength.
-        // A genuinely over-length \r\n line -- content one byte past the limit -- still
-        // throws once its terminator has arrived.
         const int maxLineLength = 8;
-        byte[] block = "1. abcdef\r\n"u8.ToArray(); // content "1. abcdef" is 9 bytes, one past the limit
+        byte[] block = "1. abcdef\r\n"u8.ToArray();
 
         MalformedLineException exception = Assert.Throws<MalformedLineException>(() =>
         {
@@ -272,10 +259,6 @@ public sealed class LineCursorTests
     [Trait("Case", "CB-19")]
     public void Reading_with_carriage_return_stripping_disabled_keeps_the_carriage_return_as_content()
     {
-        // RunCursor and OutputVerifier's output-side scan both pass
-        // stripCarriageReturn: false, because a run file -- and this sorter's own
-        // output -- is terminated by a bare '\n' throughout, so a '\r' immediately
-        // before one is always content and never a terminator's second half.
         byte[] block = "1. Apple\r\n2. Banana\r\n"u8.ToArray();
         LineCursor cursor = new(block, DefaultMaxLineLength, stripCarriageReturn: false);
 
@@ -286,10 +269,6 @@ public sealed class LineCursorTests
         Assert.False(cursor.TryReadLine(out _, out _));
     }
 
-    // Mimics ChunkReader: copy the trailing carry to the front of the next read and
-    // hand LineCursor the two concatenated. Concatenating rather than copying in place
-    // is enough here, since this exercises LineCursor's boundary logic and not the
-    // buffer-reuse discipline that belongs to ChunkReader.
     private static List<string> ReadAcrossBlocks(
         IEnumerable<byte[]> reads, int maxLineLength, out int finalCarryLength, Action<int>? observeCarry = null)
     {

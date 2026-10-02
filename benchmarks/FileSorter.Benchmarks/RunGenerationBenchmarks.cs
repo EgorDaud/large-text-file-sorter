@@ -1,26 +1,21 @@
 using Akka.Actor;
-using Akka.Configuration;
 using Akka.Streams;
 using BenchmarkDotNet.Attributes;
+using FileSorter.Infrastructure;
+using FileSorter.Planning;
 using FileSorter.RunGeneration;
-using FileSorter.Startup;
 
 namespace FileSorter.Benchmarks;
 
-// Compares run-generation strategies over identical bytes and real run files. It times
-// phase one only, so merge I/O cannot hide scheduler costs.
+// Times phase one only, so merge I/O cannot hide scheduler costs.
 [MemoryDiagnoser]
 // One invocation per iteration because setup rebuilds consumed state.
 [SimpleJob(launchCount: 2, warmupCount: 5, iterationCount: 20, invocationCount: 1)]
 public class RunGenerationBenchmarks
 {
-    // Produces multiple runs without making the matrix impractical.
     private const long InputSizeBytes = 8L * 1024 * 1024;
     private const long MemoryBudgetBytes = 2L * 1024 * 1024;
     private const int MaxLineLength = 4096;
-
-    // Duplicated tuning value; this project cannot access Program's private constant.
-    private const int AssumedMeanLineLength = 32;
 
     private const int Seed = 12345;
 
@@ -42,14 +37,11 @@ public class RunGenerationBenchmarks
     public void GlobalSetup()
     {
         _data = SyntheticInput.Generate(InputSizeBytes, Seed);
-        _tempRoot = Path.Combine(Path.GetTempPath(), "FileSorter.Benchmarks", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tempRoot);
+        _tempRoot = ScratchDirectory.Create("FileSorter.Benchmarks");
 
-        _plan = MemoryBudget.Calculate(MemoryBudgetBytes, Parallelism, MaxLineLength, AssumedMeanLineLength);
+        _plan = MemoryBudget.Calculate(MemoryBudgetBytes, Parallelism, MaxLineLength, MemoryBudget.AssumedMeanLineLength);
 
-        // ActorSystem startup stays outside timing.
-        Config quiet = ConfigurationFactory.ParseString("akka.loglevel = OFF\nakka.stdout-loglevel = OFF");
-        _system = ActorSystem.Create("sorter-benchmark", quiet);
+        _system = AkkaRunGeneration.CreateQuietSystem("sorter-benchmark");
         _materializer = _system.Materializer();
     }
 
@@ -58,13 +50,9 @@ public class RunGenerationBenchmarks
     {
         _system?.Dispose();
 
-        if (Directory.Exists(_tempRoot))
-        {
-            Directory.Delete(_tempRoot, recursive: true);
-        }
+        ScratchDirectory.Delete(_tempRoot);
     }
 
-    // Reader, pool, and run ownership are rebuilt because each iteration consumes them.
     [IterationSetup]
     public void IterationSetup()
     {

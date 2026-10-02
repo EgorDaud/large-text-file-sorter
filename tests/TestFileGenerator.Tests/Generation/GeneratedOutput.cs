@@ -1,26 +1,23 @@
 using System.Globalization;
 using System.Text;
 using TestFileGenerator.Generation;
+using Xunit;
 
 namespace TestFileGenerator.Tests.Generation;
 
-/// <summary>
-/// Generates into memory and reads the result back with a deliberately independent
-/// parser, so a defect in the line grammar cannot hide behind the code that produced it.
-/// </summary>
+// The parser is deliberately independent of production code so a grammar defect cannot hide behind it.
 internal static class GeneratedOutput
 {
     public static byte[] Write(long targetBytes, double duplicateRatio = 0.1, int seed = 1)
     {
         using MemoryStream sink = new();
-        FileWriter.Write(sink, Composer(seed, duplicateRatio), targetBytes);
+        FileWriter.Write(sink, Composer(seed, duplicateRatio), targetBytes, TestContext.Current.CancellationToken);
         return sink.ToArray();
     }
 
     public static LineComposer Composer(int seed = 1, double duplicateRatio = 0.1) =>
         new(new GeneratorOptions("unused-by-composition", TargetBytes: 0, seed, duplicateRatio));
 
-    /// <summary>Splits and parses, throwing on anything the settled line grammar rejects.</summary>
     public static IReadOnlyList<GeneratedLine> Parse(byte[] output)
     {
         List<GeneratedLine> lines = [];

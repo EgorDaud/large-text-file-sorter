@@ -1,15 +1,12 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
-using FileSorter.Merging;
-using FileSorter.RunGeneration;
-using FileSorter.Startup;
+using FileSorter.Cli;
+using FileSorter.Planning;
 
 namespace FileSorter.Benchmarks;
 
-// Console modes that measure peak managed heap at a fixed memory budget over several input
-// sizes. Each size runs in a fresh worker process because input generation changes GC
-// bookkeeping. The parent generates input; the worker measures only the sorting pipeline.
+// Each (size, pipeline) runs in a fresh worker process because generating input in-process skews GC bookkeeping.
 internal static class FlatnessRunner
 {
     private static readonly (string Label, long Bytes)[] Sizes =
@@ -25,19 +22,17 @@ internal static class FlatnessRunner
         ("1 GiB", 1L * 1024 * 1024 * 1024),
     ];
 
-    // Fixed budget for the single-worker matrix.
     internal const long MemoryBudgetBytes = 16L * 1024 * 1024;
 
-    // Budget selected to give two merge workers; the worker reports the actual plan.
+    // Chosen so the plan gets two merge workers.
     internal const long ParallelMergeMemoryBudgetBytes = 64L * 1024 * 1024;
 
     internal const int MaxLineLength = 4096;
-    internal const int AssumedMeanLineLength = 32;
+
     internal const int Parallelism = 4;
     internal const int SampleIntervalMilliseconds = 5;
     private const int Seed = 424242;
 
-    // Allows GC bookkeeping noise while still flagging large growth.
     private const double TolerancePercent = 60.0;
 
     public static async Task<int> RunAsync() =>
@@ -52,31 +47,32 @@ internal static class FlatnessRunner
     private static async Task<int> RunMatrixAsync(
         string description, long memoryBudgetBytes, (string Label, long Bytes)[] sizes)
     {
-        string tempRoot = Path.Combine(Path.GetTempPath(), "FileSorter.Benchmarks.Flatness", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempRoot);
+        string tempRoot = ScratchDirectory.Create("FileSorter.Benchmarks.Flatness");
 
-        List<(string Label, long InputBytes, long PeakBytes, int MergeParallelism)> results = [];
+        Pipeline[] pipelines = [Pipeline.Channels, Pipeline.Akka];
+        List<(Pipeline Pipeline, string Label, long InputBytes, long PeakBytes, int MergeParallelism)> results = [];
         try
         {
             foreach ((string label, long bytes) in sizes)
             {
-                Console.WriteLine($"Sorting {label}...");
-                (long peak, int mergeParallelism) = await RunInChildProcessAsync(tempRoot, label, bytes, memoryBudgetBytes);
-                results.Add((label, bytes, peak, mergeParallelism));
-                Console.WriteLine($"  peak managed heap: {peak / (1024.0 * 1024.0):F2} MiB (MergeParallelism {mergeParallelism})");
+                string inputPath = await WriteInputAsync(tempRoot, label, bytes);
+                foreach (Pipeline pipeline in pipelines)
+                {
+                    Console.WriteLine($"Sorting {label} ({pipeline})...");
+                    (long peak, int mergeParallelism) = await RunInChildProcessAsync(
+                        tempRoot, inputPath, label, memoryBudgetBytes, pipeline);
+                    results.Add((pipeline, label, bytes, peak, mergeParallelism));
+                    Console.WriteLine($"  peak managed heap: {peak / (1024.0 * 1024.0):F2} MiB (MergeParallelism {mergeParallelism})");
+                }
+
+                File.Delete(inputPath);
             }
         }
         finally
         {
-            Directory.Delete(tempRoot, recursive: true);
+            ScratchDirectory.Delete(tempRoot);
         }
 
-        long minPeak = results.Min(r => r.PeakBytes);
-        long maxPeak = results.Max(r => r.PeakBytes);
-        double ratioPercent = minPeak == 0 ? 0 : (maxPeak - minPeak) * 100.0 / minPeak;
-        bool flat = ratioPercent <= TolerancePercent;
-
-        // Each matrix must report the same merge parallelism for every size.
         int matrixMergeParallelism = results[0].MergeParallelism;
         bool consistentMergeParallelism = results.All(r => r.MergeParallelism == matrixMergeParallelism);
 
@@ -84,43 +80,58 @@ internal static class FlatnessRunner
         Console.WriteLine($"Flatness result -- {description}");
         Console.WriteLine($"  fixed budget:            {memoryBudgetBytes / (1024.0 * 1024.0):F0} MiB");
         Console.WriteLine($"  merge parallelism (N):   {matrixMergeParallelism}{(consistentMergeParallelism ? string.Empty : " (INCONSISTENT ACROSS SIZES)")}");
-        Console.WriteLine("  isolation:               each size measured in its own freshly launched process (see the type doc comment for why)");
+        Console.WriteLine("  isolation:               each (size, pipeline) measured in its own freshly launched process (see the type doc comment for why)");
         Console.WriteLine($"  sampling method:         GC.GetTotalMemory(false) in the worker process, background timer, {SampleIntervalMilliseconds} ms interval, running maximum kept (not post-run)");
-        Console.WriteLine($"  stated tolerance:        {TolerancePercent:F0}% (largest peak over smallest)");
+        Console.WriteLine($"  stated tolerance:        {TolerancePercent:F0}% (largest peak over smallest, per pipeline)");
         Console.WriteLine();
-        Console.WriteLine("  Input size | Peak managed heap | Peak vs budget");
-        Console.WriteLine("  -----------|--------------------|----------------");
-        foreach ((string label, long inputBytes, long peakBytes, int _) in results)
+        Console.WriteLine("  Pipeline | Input size | Peak managed heap | Peak vs budget");
+        Console.WriteLine("  ---------|------------|--------------------|----------------");
+        foreach (Pipeline pipeline in pipelines)
         {
-            double peakMiB = peakBytes / (1024.0 * 1024.0);
-            double budgetMiB = memoryBudgetBytes / (1024.0 * 1024.0);
-            double vsBudgetPercent = (peakMiB - budgetMiB) * 100.0 / budgetMiB;
-            Console.WriteLine(
-                $"  {label,10} | {peakMiB,8:F2} MiB ({inputBytes / (1024.0 * 1024.0):F0} MiB input) | {vsBudgetPercent,6:F1}%");
+            foreach ((Pipeline _, string label, long inputBytes, long peakBytes, int _) in results.Where(r => r.Pipeline == pipeline))
+            {
+                double peakMiB = peakBytes / (1024.0 * 1024.0);
+                double budgetMiB = memoryBudgetBytes / (1024.0 * 1024.0);
+                double vsBudgetPercent = (peakMiB - budgetMiB) * 100.0 / budgetMiB;
+                Console.WriteLine(
+                    $"  {pipeline,-8} | {label,10} | {peakMiB,8:F2} MiB ({inputBytes / (1024.0 * 1024.0):F0} MiB input) | {vsBudgetPercent,6:F1}%");
+            }
         }
 
         Console.WriteLine();
-        Console.WriteLine($"  observed spread: {ratioPercent:F1}% ({(flat ? "within" : "EXCEEDS")} the stated {TolerancePercent:F0}% tolerance)");
+        bool flat = true;
+        foreach (Pipeline pipeline in pipelines)
+        {
+            long minPeak = results.Where(r => r.Pipeline == pipeline).Min(r => r.PeakBytes);
+            long maxPeak = results.Where(r => r.Pipeline == pipeline).Max(r => r.PeakBytes);
+            double ratioPercent = minPeak == 0 ? 0 : (maxPeak - minPeak) * 100.0 / minPeak;
+            bool pipelineFlat = ratioPercent <= TolerancePercent;
+            flat &= pipelineFlat;
+            Console.WriteLine($"  observed spread ({pipeline}): {ratioPercent:F1}% ({(pipelineFlat ? "within" : "EXCEEDS")} the stated {TolerancePercent:F0}% tolerance)");
+        }
 
         return flat && consistentMergeParallelism ? 0 : 1;
     }
 
-    // Generate input in the parent so worker sampling excludes generation churn.
-    private static async Task<(long PeakBytes, int MergeParallelism)> RunInChildProcessAsync(
-        string tempRoot, string label, long targetBytes, long memoryBudgetBytes)
+    private static async Task<string> WriteInputAsync(string tempRoot, string label, long targetBytes)
     {
-        string safeLabel = label.Replace(' ', '_');
-        string inputPath = Path.Combine(tempRoot, $"input-{safeLabel}.txt");
+        string inputPath = Path.Combine(tempRoot, $"input-{label.Replace(' ', '_')}.txt");
+        byte[] data = SyntheticInput.Generate(targetBytes, Seed);
+        await File.WriteAllBytesAsync(inputPath, data);
+        return inputPath;
+    }
+
+    private static async Task<(long PeakBytes, int MergeParallelism)> RunInChildProcessAsync(
+        string tempRoot, string inputPath, string label, long memoryBudgetBytes, Pipeline pipeline)
+    {
+        string safeLabel = $"{label.Replace(' ', '_')}-{pipeline}";
         string outputPath = Path.Combine(tempRoot, $"output-{safeLabel}.txt");
         string runsDirectory = Path.Combine(tempRoot, $"runs-{safeLabel}");
 
-        byte[] data = SyntheticInput.Generate(targetBytes, Seed);
-        await File.WriteAllBytesAsync(inputPath, data);
-
-        ProcessStartInfo startInfo = BuildWorkerStartInfo(inputPath, outputPath, runsDirectory, memoryBudgetBytes);
+        ProcessStartInfo startInfo = BuildWorkerStartInfo(inputPath, outputPath, runsDirectory, memoryBudgetBytes, pipeline);
         using Process worker = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start the flatness worker process.");
 
-        // Drain both pipes concurrently to avoid blocking the child on a full error pipe.
+        // Drain both pipes concurrently, or the child can block on a full stderr pipe.
         Task<string> stdoutTask = worker.StandardOutput.ReadToEndAsync();
         Task<string> stderrTask = worker.StandardError.ReadToEndAsync();
         await Task.WhenAll(stdoutTask, stderrTask);
@@ -132,7 +143,7 @@ internal static class FlatnessRunner
         if (worker.ExitCode != 0)
         {
             throw new InvalidOperationException(
-                $"The flatness worker process for {label} exited with code {worker.ExitCode}. stderr:\n{stderr}");
+                $"The flatness worker process for {label} ({pipeline}) exited with code {worker.ExitCode}. stderr:\n{stderr}");
         }
 
         if (!long.TryParse(stdout.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out long peakBytes))
@@ -140,7 +151,6 @@ internal static class FlatnessRunner
             throw new InvalidOperationException($"The flatness worker process for {label} printed unparseable output: '{stdout}'.");
         }
 
-        // Stderr carries the plan diagnostic; stdout remains a single peak value.
         int mergeParallelism = ParseMergeParallelism(stderr, label);
 
         return (peakBytes, mergeParallelism);
@@ -163,9 +173,8 @@ internal static class FlatnessRunner
             $"The flatness worker process for {label} did not print its '{Prefix}' diagnostic on stderr. stderr:\n{stderr}");
     }
 
-    // Relaunches the current executable or its managed assembly under dotnet.
     private static ProcessStartInfo BuildWorkerStartInfo(
-        string inputPath, string outputPath, string runsDirectory, long memoryBudgetBytes)
+        string inputPath, string outputPath, string runsDirectory, long memoryBudgetBytes, Pipeline pipeline)
     {
         string processPath = Environment.ProcessPath
             ?? throw new InvalidOperationException("Could not determine the current process path to relaunch as a worker.");
@@ -187,76 +196,29 @@ internal static class FlatnessRunner
         startInfo.ArgumentList.Add(outputPath);
         startInfo.ArgumentList.Add(runsDirectory);
         startInfo.ArgumentList.Add(memoryBudgetBytes.ToString(CultureInfo.InvariantCulture));
+        startInfo.ArgumentList.Add(pipeline.ToString());
         return startInfo;
     }
 
-    // Worker protocol: one peak value on stdout and merge parallelism on stderr.
-    public static async Task<int> RunWorkerAsync(string inputPath, string outputPath, string runsDirectory, long memoryBudgetBytes)
+    // Sorts through the shipped SortCommand; the plan is computed here only to report MergeParallelism.
+    public static async Task<int> RunWorkerAsync(
+        string inputPath, string outputPath, string runsDirectory, long memoryBudgetBytes, Pipeline pipeline)
     {
+        SorterOptions options = new(
+            inputPath, outputPath, runsDirectory, memoryBudgetBytes, MaxLineLength, Parallelism, pipeline);
+        MemoryPlan plan = MemoryBudget.Calculate(
+            memoryBudgetBytes, Parallelism, MaxLineLength, MemoryBudget.AssumedMeanFor(MaxLineLength));
+        Console.Error.WriteLine($"MergeParallelism={plan.MergeParallelism}");
+
         // Exclude startup allocations from the sampled peak.
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
 
         using PeakMemorySampler sampler = new(SampleIntervalMilliseconds);
-        using TemporaryRunSet runs = new(runsDirectory);
-
-        MemoryPlan plan = MemoryBudget.Calculate(memoryBudgetBytes, Parallelism, MaxLineLength, AssumedMeanLineLength);
-        Console.Error.WriteLine($"MergeParallelism={plan.MergeParallelism}");
-
-        IReadOnlyList<string> runPaths = await GenerateRunsAsync(inputPath, plan, runs);
-
-        if (runPaths.Count == 0)
-        {
-            using (File.Create(outputPath))
-            {
-            }
-        }
-        else if (runPaths.Count == 1)
-        {
-            RunPlacement.Place(runPaths[0], outputPath, TryMove);
-        }
-        else
-        {
-            // Reclaim phase-one allocations before merge buffers are allocated.
-            GC.Collect();
-
-            MergeExecutor executor = new(runs, plan, MaxLineLength);
-            await executor.ExecuteAsync(runPaths, outputPath, CancellationToken.None);
-        }
+        int exitCode = await SortCommand.RunAsync(options, CancellationToken.None);
 
         Console.WriteLine(sampler.PeakBytes.ToString(CultureInfo.InvariantCulture));
-        return 0;
-    }
-
-    // Keep phase-one objects scoped so they can be collected before merging.
-    private static async Task<IReadOnlyList<string>> GenerateRunsAsync(
-        string inputPath, MemoryPlan plan, TemporaryRunSet runs)
-    {
-        // Match the production asynchronous input configuration.
-        using FileStream input = new(
-            inputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
-
-        BufferPool pool = new(plan.ChunkSize, plan.DescriptorCapacity, plan.PoolCapacity);
-
-        // Dispose the reader before its input stream.
-        await using ChunkReader reader = new(input, pool, MaxLineLength);
-        ChunkSpiller spiller = new(runs, plan.SpillBufferSize);
-
-        return await ChannelRunGeneration.RunAsync(reader, spiller.SpillAsync, Parallelism, CancellationToken.None);
-    }
-
-    private static bool TryMove(string from, string to)
-    {
-        try
-        {
-            File.Move(from, to);
-            return true;
-        }
-        catch (IOException)
-        {
-            return false;
-        }
+        return exitCode;
     }
 }

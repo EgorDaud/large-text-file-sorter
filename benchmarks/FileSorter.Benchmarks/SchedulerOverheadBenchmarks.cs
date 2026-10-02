@@ -1,14 +1,12 @@
 using Akka.Actor;
-using Akka.Configuration;
 using Akka.Streams;
 using BenchmarkDotNet.Attributes;
+using FileSorter.Planning;
 using FileSorter.RunGeneration;
-using FileSorter.Startup;
 
 namespace FileSorter.Benchmarks;
 
-// Isolates reading, scheduling, and buffer hand-off. The no-op spill releases each pool
-// slot, matching a real spiller's ownership contract without sorting or writing.
+// Isolates reading, scheduling and buffer hand-off: the spill only releases each pool slot.
 [MemoryDiagnoser]
 // One invocation per iteration because setup rebuilds consumed state.
 [SimpleJob(launchCount: 2, warmupCount: 5, iterationCount: 20, invocationCount: 1)]
@@ -17,7 +15,7 @@ public class SchedulerOverheadBenchmarks
     private const long InputSizeBytes = 8L * 1024 * 1024;
     private const long MemoryBudgetBytes = 2L * 1024 * 1024;
     private const int MaxLineLength = 4096;
-    private const int AssumedMeanLineLength = 32;
+
     private const int Seed = 12345;
 
     private byte[] _data = [];
@@ -35,10 +33,9 @@ public class SchedulerOverheadBenchmarks
     public void GlobalSetup()
     {
         _data = SyntheticInput.Generate(InputSizeBytes, Seed);
-        _plan = MemoryBudget.Calculate(MemoryBudgetBytes, Parallelism, MaxLineLength, AssumedMeanLineLength);
+        _plan = MemoryBudget.Calculate(MemoryBudgetBytes, Parallelism, MaxLineLength, MemoryBudget.AssumedMeanLineLength);
 
-        Config quiet = ConfigurationFactory.ParseString("akka.loglevel = OFF\nakka.stdout-loglevel = OFF");
-        _system = ActorSystem.Create("sorter-benchmark-overhead", quiet);
+        _system = AkkaRunGeneration.CreateQuietSystem("sorter-benchmark-overhead");
         _materializer = _system.Materializer();
     }
 
@@ -61,7 +58,6 @@ public class SchedulerOverheadBenchmarks
         _stream?.Dispose();
     }
 
-    // Matches the spiller's buffer-release contract. Strategies do not inspect the path.
     private static Task<string> NoOpSpillAsync(Chunk chunk, CancellationToken ct)
     {
         chunk.Buffer.Dispose();

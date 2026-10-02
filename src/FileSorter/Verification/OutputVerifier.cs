@@ -1,22 +1,14 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Text;
+using FileSorter.Infrastructure;
 using FileSorter.LineFormat;
 
 namespace FileSorter.Verification;
 
-// Checks output order and compares line counts and order-independent hashes in one scan
-// per file. It shares the production parser and comparator, so it is not an independent oracle.
-// Each scan uses a fixed buffer; output comparison also retains the previous line.
-// The wrapping sum of FNV-1a hashes can collide for different multisets.
-// Input uses the same BOM/CRLF normalization as the sorter. Output keeps content CRs
-// and must end every line with LF.
+// Not an independent oracle: it shares the production parser and comparator.
+// The wrapping sum of FNV-1a hashes is order-independent but can collide for different multisets.
 internal static class OutputVerifier
 {
-    private const int PreviewMaxBytes = 128;
-
-    // Each scan reserves this much read space plus maxLineLength bytes for carry.
-    // CommandLine also uses this constant to calculate the largest valid --max-line.
-    internal const int BaseBufferSize = 4 * 1024 * 1024;
+    public const int BaseBufferSize = 4 * 1024 * 1024;
 
     private const ulong FnvOffsetBasis = 14695981039346656037UL;
     private const ulong FnvPrime = 1099511628211UL;
@@ -27,22 +19,22 @@ internal static class OutputVerifier
         "first faults -- before the using declarations dispose the streams those scans read from. The rule " +
         "fires because the tasks are held in locals rather than awaited where they are started, which is " +
         "what lets the two files be scanned concurrently.")]
-    public static async Task<VerificationResult> RunAsync(VerifyOptions options, CancellationToken ct)
+    public static async Task<VerificationResult> RunAsync(
+        string inputPath, string outputPath, int maxLineLength, CancellationToken ct)
     {
         using FileStream input = new(
-            options.InputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1,
+            inputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: FileStreams.Unbuffered,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         using FileStream output = new(
-            options.OutputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1,
+            outputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: FileStreams.Unbuffered,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
         long inputBytes = input.Length;
         long outputBytes = output.Length;
 
-        Task<ScanOutcome> inputScan = ScanAsync(input, options.InputPath, options.MaxLineLength, stripByteOrderMark: true, stripCarriageReturn: true, checkOrder: false, requireTerminatedTail: false, ct);
-        Task<ScanOutcome> outputScan = ScanAsync(output, options.OutputPath, options.MaxLineLength, stripByteOrderMark: false, stripCarriageReturn: false, checkOrder: true, requireTerminatedTail: true, ct);
-        // WhenAll first: awaiting the scans in turn would leave the second one's failure
-        // unobserved when the first throws.
+        Task<ScanOutcome> inputScan = ScanAsync(input, inputPath, FileRole.Input, maxLineLength, ct);
+        Task<ScanOutcome> outputScan = ScanAsync(output, outputPath, FileRole.Output, maxLineLength, ct);
+        // WhenAll first, so the second scan's fault is observed even when the first throws.
         await Task.WhenAll(inputScan, outputScan);
 
         ScanOutcome inputOutcome = await inputScan;
@@ -56,12 +48,10 @@ internal static class OutputVerifier
                 $"Order violation at output line {violation.LineNumber}: previous \"{violation.PreviousPreview}\" " +
                 $"sorts after current \"{violation.CurrentPreview}\".";
 
-            // The line number tells the caller that the output count and hash are partial.
             return new VerificationResult(
                 VerificationOutcome.OrderViolation, inputReport, outputReport, detail, violation.LineNumber);
         }
 
-        // The scan reached EOF, so the count and hash cover all complete lines.
         if (outputOutcome.Unterminated is { } unterminated)
         {
             string detail =
@@ -89,6 +79,12 @@ internal static class OutputVerifier
         return new VerificationResult(VerificationOutcome.Verified, inputReport, outputReport, FailureDetail: null);
     }
 
+    private enum FileRole
+    {
+        Input,
+        Output,
+    }
+
     private readonly record struct ScanSummary(long LineCount, ulong Hash);
 
     private sealed record OrderViolation(long LineNumber, string PreviousPreview, string CurrentPreview);
@@ -97,14 +93,12 @@ internal static class OutputVerifier
 
     private sealed record ScanOutcome(ScanSummary Summary, OrderViolation? Violation, UnterminatedOutput? Unterminated);
 
-    // Attach the file path to parse failures so input and output errors are distinguishable.
     private static async Task<ScanOutcome> ScanAsync(
-        Stream stream, string filePath, int maxLineLength, bool stripByteOrderMark, bool stripCarriageReturn,
-        bool checkOrder, bool requireTerminatedTail, CancellationToken ct)
+        Stream stream, string filePath, FileRole role, int maxLineLength, CancellationToken ct)
     {
         try
         {
-            return await ScanCoreAsync(stream, maxLineLength, stripByteOrderMark, stripCarriageReturn, checkOrder, requireTerminatedTail, ct);
+            return await ScanCoreAsync(stream, role, maxLineLength, ct);
         }
         catch (MalformedLineException ex)
         {
@@ -113,13 +107,15 @@ internal static class OutputVerifier
     }
 
     private static async Task<ScanOutcome> ScanCoreAsync(
-        Stream stream, int maxLineLength, bool stripByteOrderMark, bool stripCarriageReturn, bool checkOrder,
-        bool requireTerminatedTail, CancellationToken ct)
+        Stream stream, FileRole role, int maxLineLength, CancellationToken ct)
     {
+        bool userInputRules = role is FileRole.Input;
+        bool checkOrder = !userInputRules;
+        bool requireTerminatedTail = !userInputRules;
+
         int bufferSize = CheckedBufferSize(maxLineLength);
         byte[] buffer = new byte[bufferSize];
 
-        // Keep the previous line across buffer refills.
         byte[]? previousLine = checkOrder ? new byte[maxLineLength + 1] : null;
         LineDescriptor previousDescriptor = default;
         bool havePrevious = false;
@@ -139,12 +135,11 @@ internal static class OutputVerifier
                 {
                     violation = new OrderViolation(
                         lineNumber,
-                        PreviewOf(previousLine!, previousDescriptor.Offset, previousDescriptor.Length),
-                        PreviewOf(source, offset, length));
+                        MalformedLineException.PreviewOf(previousLine.AsSpan(previousDescriptor.Offset, previousDescriptor.Length)),
+                        MalformedLineException.PreviewOf(source.AsSpan(offset, length)));
                     return;
                 }
 
-                // Rebase offsets after copying; the parsed number and prefix remain valid.
                 Array.Copy(source, offset, previousLine!, 0, length);
                 previousDescriptor = new LineDescriptor(
                     current.Prefix, current.Number, offset: 0, length, stringOffset: current.StringOffset - offset);
@@ -152,7 +147,7 @@ internal static class OutputVerifier
             }
             else
             {
-                // Validate input syntax even though its order is irrelevant.
+                // Called only to validate syntax.
                 Describe(source, offset, length, fileOffsetOfBufferZero, lineNumber);
             }
 
@@ -168,7 +163,8 @@ internal static class OutputVerifier
         while (violation is null)
         {
             int fillAmount = bufferSize - carryLength;
-            int freshCount = await FillAsync(stream, buffer, carryLength, fillAmount, ct);
+            int freshCount = await stream.ReadAtLeastAsync(
+                buffer.AsMemory(carryLength, fillAmount), fillAmount, throwOnEndOfStream: false, ct);
             int windowLength = carryLength + freshCount;
             bool exhausted = freshCount < fillAmount;
             streamPosition += freshCount;
@@ -178,11 +174,10 @@ internal static class OutputVerifier
                 break;
             }
 
-            // Carry starts at buffer offset zero, so this maps offsets back to the file.
             long blockBaseOffset = streamPosition - windowLength;
             LineCursor cursor = new(
                 buffer.AsSpan(0, windowLength), maxLineLength, blockBaseOffset, lineNumber,
-                stripByteOrderMark: firstBlock && stripByteOrderMark, stripCarriageReturn: stripCarriageReturn);
+                stripByteOrderMark: firstBlock && userInputRules, stripCarriageReturn: userInputRules);
             firstBlock = false;
 
             while (violation is null && cursor.TryReadLine(out int offset, out int length))
@@ -204,15 +199,12 @@ internal static class OutputVerifier
                 {
                     if (requireTerminatedTail)
                     {
-                        // Output must end in LF. Accepting an unterminated tail would hide truncation.
                         unterminated = new UnterminatedOutput(
-                            lineNumber, blockBaseOffset + carryOffset, PreviewOf(buffer, carryOffset, carryLength));
+                            lineNumber, blockBaseOffset + carryOffset, MalformedLineException.PreviewOf(buffer.AsSpan(carryOffset, carryLength)));
                     }
                     else
                     {
-                        // Match the input reader: strip a final bare CR and ignore a tail containing only CR.
-                        bool tailEndsInCarriageReturn = buffer[carryOffset + carryLength - 1] == (byte)'\r';
-                        int finalLength = tailEndsInCarriageReturn ? carryLength - 1 : carryLength;
+                        int finalLength = LineCursor.UnterminatedTailLength(buffer.AsSpan(carryOffset, carryLength));
                         if (finalLength > 0)
                         {
                             HandleLine(buffer, carryOffset, finalLength, blockBaseOffset);
@@ -229,7 +221,6 @@ internal static class OutputVerifier
         return new ScanOutcome(new ScanSummary(lineCount, hashSum), violation, unterminated);
     }
 
-    // Guard direct callers as well as the CLI against array-size overflow.
     private static int CheckedBufferSize(int maxLineLength)
     {
         long size = (long)BaseBufferSize + maxLineLength;
@@ -244,43 +235,15 @@ internal static class OutputVerifier
 
     private static LineDescriptor Describe(byte[] buffer, int offset, int length, long fileOffsetOfBufferZero, long lineNumber)
     {
-        ReadOnlySpan<byte> line = buffer.AsSpan(offset, length);
-        if (!LineParser.TryParse(line, out long number, out int stringStart))
+        if (!LineDescriptor.TryCreate(buffer, offset, length, out LineDescriptor descriptor))
         {
-            ReadOnlySpan<byte> preview = line.Length > PreviewMaxBytes ? line[..PreviewMaxBytes] : line;
-            throw new MalformedLineException(fileOffsetOfBufferZero + offset, lineNumber, Encoding.UTF8.GetString(preview));
+            throw new MalformedLineException(
+                fileOffsetOfBufferZero + offset, lineNumber, MalformedLineException.PreviewOf(buffer.AsSpan(offset, length)));
         }
 
-        int stringOffset = offset + stringStart;
-        int stringLength = LineDescriptor.StringLengthOf(offset, length, stringOffset);
-        ulong prefix = LineDescriptor.BuildPrefix(buffer.AsSpan(stringOffset, stringLength));
-        return new LineDescriptor(prefix, number, offset, length, stringOffset);
+        return descriptor;
     }
 
-    private static string PreviewOf(byte[] buffer, int offset, int length)
-    {
-        int previewLength = Math.Min(length, PreviewMaxBytes);
-        return Encoding.UTF8.GetString(buffer, offset, previewLength);
-    }
-
-    private static async Task<int> FillAsync(Stream stream, byte[] buffer, int offset, int count, CancellationToken ct)
-    {
-        int total = 0;
-        while (total < count)
-        {
-            int read = await stream.ReadAsync(buffer.AsMemory(offset + total, count - total), ct);
-            if (read == 0)
-            {
-                break;
-            }
-
-            total += read;
-        }
-
-        return total;
-    }
-
-    // FNV-1a arithmetic wraps modulo 2^64.
     private static ulong Fnv1a64(ReadOnlySpan<byte> data)
     {
         ulong hash = FnvOffsetBasis;

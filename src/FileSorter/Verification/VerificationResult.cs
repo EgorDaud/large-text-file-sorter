@@ -8,14 +8,10 @@ internal enum VerificationOutcome
     OrderViolation,
     CountMismatch,
     HashMismatch,
-
-    // The sorter always terminates output lines, including the last one.
     OutputNotTerminated,
 }
 
-// FailureDetail is null on success. An order violation stops the output scan early:
-// Output.LineCount and Output.Hash are partial, while Output.ByteCount is the file size.
-// Report OrderViolationLineNumber instead of presenting partial totals as final.
+// On OrderViolation the scan stops early, so Output.LineCount and Output.Hash are partial.
 internal sealed record VerificationResult(
     VerificationOutcome Outcome,
     FileScanReport Input,

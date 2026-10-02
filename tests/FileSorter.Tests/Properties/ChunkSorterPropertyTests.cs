@@ -6,23 +6,12 @@ using Xunit;
 
 namespace FileSorter.Tests.Properties;
 
-/// <summary>
-/// <see cref="ChunkSorter"/>'s bucket-then-introsort against a naive sort that calls
-/// <see cref="LineOrder.Compare"/> directly with no bucketing pass: splitting a chunk
-/// into buckets before sorting each one must change nothing about the sequence of bytes
-/// the sort produces. Unlike <c>LineEntryGen</c>, which is printable ASCII only, the
-/// string parts here are arbitrary bytes, so all 256 top bytes -- and so every bucket --
-/// are reachable.
-/// </summary>
 public sealed class ChunkSorterPropertyTests
 {
+    // Arbitrary bytes, unlike LineEntryGen's ASCII, so every top-byte bucket is reachable.
     private static readonly Gen<byte[]> ArbitraryStringPart = Gen.Byte.Array[0, 20];
     private static readonly Gen<(long Number, byte[] StringPart)> Entry = Gen.Select(Gen.Long, ArbitraryStringPart);
 
-    // Up to 400 entries so that, spread over 256 buckets, both "many buckets empty"
-    // and "one bucket holds a real introsort's worth of lines" are exercised across
-    // the iteration budget, not only the near-empty-chunk shapes a small count
-    // would leave as the common case.
     private static readonly Gen<List<(long Number, byte[] StringPart)>> Entries = Entry.List[0, 400];
 
     [Fact]
@@ -43,10 +32,7 @@ public sealed class ChunkSorterPropertyTests
         }, iter: 1000);
     }
 
-    // Descriptors are built directly rather than through LineCursor/LineParser: the
-    // string parts here are arbitrary bytes and may contain '\n' or '.', which the real
-    // grammar would read back as different boundaries than this test intends. The sort
-    // is the subject, not the splitter, so the offsets are handed over already known.
+    // Not via LineParser: arbitrary bytes may contain '\n' or '.', which it would split on.
     private static (byte[] Buffer, LineDescriptor[] Descriptors) Build(
         List<(long Number, byte[] StringPart)> entries)
     {
@@ -71,9 +57,7 @@ public sealed class ChunkSorterPropertyTests
         return (bufferStream.ToArray(), descriptors);
     }
 
-    // Comparing concatenated raw bytes rather than the descriptor arrays themselves:
-    // the sort is not stable, so the two sorts need not agree on which of two
-    // byte-identical lines came from which entry, only on the bytes of the output.
+    // Compares bytes, not descriptor order: the sort is not stable.
     private static byte[] ConcatenatedLines(LineDescriptor[] descriptors, byte[] buffer)
     {
         using MemoryStream output = new();

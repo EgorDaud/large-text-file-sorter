@@ -1,25 +1,13 @@
 using CsCheck;
 using FileSorter.LineFormat;
 using FileSorter.RunGeneration;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Properties;
 
-/// <summary>
-/// The chunk splitter's reassembly property. <see cref="ChunkReader"/>, driven the way
-/// run generation drives it, is handed a small buffer pool against a generated file, so
-/// most inputs are split across several reads and several chunks with carry-over between
-/// them. Concatenating every emitted line, in the order the chunks were produced and in
-/// the order each chunk lists them, must reproduce the input exactly: no line dropped,
-/// duplicated, or reordered by chunking alone.
-/// </summary>
 public sealed class ChunkSplitterReassemblyPropertyTests
 {
-    // MaxLineLength is strictly greater than the longest line LineEntryGen can produce
-    // (under 48 bytes at the extreme: long.MinValue's 20 characters, ". ", and 16
-    // characters of string part), and BufferSize must exceed it, as ChunkReader's
-    // constructor requires. The small descriptor capacity forces a chunk boundary every
-    // few lines even though the whole generated file is only a few kilobytes.
     private const int MaxLineLength = 56;
     private const int BufferSize = 96;
     private const int DescriptorCapacity = 3;
@@ -38,11 +26,7 @@ public sealed class ChunkSplitterReassemblyPropertyTests
         }, iter: 150);
     }
 
-    // "Reproduces the input" means under the terminator rule, not byte for byte:
-    // LineEntryGen.BuildInput occasionally writes a string part ending in '\r', and the
-    // reader strips the single '\r' immediately before the '\n' written alongside it.
-    // NaiveLineFormat.Split is the independent reading of that rule, used here to build
-    // the expected bytes rather than to compare a splitter's output against.
+    // Not the raw input: BuildInput can end a string part in '\r', which the reader strips before '\n'.
     private static byte[] NormalizedExpected(byte[] input)
     {
         NaiveLineFormat.NaiveSplitResult split =
@@ -61,8 +45,7 @@ public sealed class ChunkSplitterReassemblyPropertyTests
     {
         using MemoryStream stream = new(input);
 
-        // Capacity 2 is enough: nothing here spills concurrently, so the only two slots
-        // ever held at once are the chunk being read and the reader's prefetch.
+        // Two slots: the chunk being read and the reader's prefetch.
         BufferPool pool = new(BufferSize, DescriptorCapacity, capacity: 2);
         await using ChunkReader reader = new(stream, pool, MaxLineLength);
 
@@ -74,9 +57,6 @@ public sealed class ChunkSplitterReassemblyPropertyTests
             {
                 LineDescriptor line = chunk.Value.Buffer.Lines[i];
                 reassembled.Write(chunk.Value.Buffer.Bytes, line.Offset, line.Length);
-
-                // BuildInput terminates every line, the last one included, with a single
-                // '\n', which is what lets this reconstruction match the input.
                 reassembled.WriteByte((byte)'\n');
             }
 

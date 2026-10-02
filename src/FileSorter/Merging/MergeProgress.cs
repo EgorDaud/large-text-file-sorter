@@ -2,8 +2,7 @@ using System.Diagnostics;
 
 namespace FileSorter.Merging;
 
-// Bytes written and output-write wait time for one MergeExecutor call. Partition workers
-// update it concurrently, so writers use Interlocked and progress readers use Volatile.Read.
+// Partition workers update this concurrently while a progress reporter reads it.
 internal sealed class MergeProgress
 {
     private long _bytesWritten;
@@ -11,7 +10,6 @@ internal sealed class MergeProgress
 
     public long BytesWritten => Volatile.Read(ref _bytesWritten);
 
-    // Write wait time summed across every worker and pass.
     public double OutputWaitSeconds => (double)Volatile.Read(ref _outputWaitStopwatchTicks) / Stopwatch.Frequency;
 
     public void AddBytesWritten(int count) => Interlocked.Add(ref _bytesWritten, count);

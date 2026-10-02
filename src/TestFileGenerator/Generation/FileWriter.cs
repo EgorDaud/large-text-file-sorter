@@ -5,14 +5,13 @@ namespace TestFileGenerator.Generation;
 /// Writes complete lines until the next line would exceed the target.
 internal static class FileWriter
 {
-    // Avoid a callback for every line on large files.
     private const int LinesPerReport = 4096;
 
-    /// Bytes written, always at or below targetBytes.
     public static long Write(
         Stream output,
         LineComposer composer,
         long targetBytes,
+        CancellationToken ct,
         Action<long>? onProgress = null)
     {
         ArgumentNullException.ThrowIfNull(output);
@@ -34,6 +33,8 @@ internal static class FileWriter
                 {
                     linesSinceReport = 0;
                     onProgress?.Invoke(written);
+
+                    ct.ThrowIfCancellationRequested();
                 }
             }
 
