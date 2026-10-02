@@ -4,7 +4,7 @@ Every number the README's "Results" section refers to, measured on one machine, 
 
 **Machine.** AMD Ryzen 7 7840HS, 8 physical / 16 logical cores. Windows 11. .NET 10.0.11. NVMe SSD. Release builds, one sort at a time, input, temporary files and output on the same volume.
 
-**Input.** `TestFileGenerator` at seed 42, average line length 37.64 bytes. The 20 GiB file holds 570,483,043 lines and hashes to `2e91107033e198d4`; the 100 GiB file is described in section 2.
+**Input.** `TestFileGenerator` at seed 42, average line length 37.64 bytes. The 20 GiB file holds 570,483,043 lines and hashes to `2e91107033e198d4`; the 100 GiB file is described in section 2. That hash holds only on this .NET version: the generator's `System.Random` sequence is not promised stable across major versions, so a different runtime may produce a different file for the same seed.
 
 **Benchmark input changed on 2026-10-02.** The in-process benchmarks and `-- --flatness` used to generate their input from a hand-rolled ten-word ASCII vocabulary. They now call `TestFileGenerator`'s own `LineComposer` (seeded, default 0.1 duplicate ratio), so their data has the shipped file's shape. Benchmark and flatness figures recorded before 2026-10-02 used the old vocabulary and are not directly comparable with figures taken after it; they are left as recorded.
 
@@ -41,7 +41,7 @@ Ten consecutive sorts at `--memory 4GiB` on the `akka` pipeline (the default whe
 | Output bytes | 21,474,836,456 |
 | Temporary files left behind | 0 |
 
-**The output verifies**: 570,483,043 lines and hash `2e91107033e198d4` on both sides. The suite passes: 492 tests, none skipped, warnings as errors.
+**The output verifies**: 570,483,043 lines and hash `2e91107033e198d4` on both sides. The suite passed at the time of the measurement: 492 tests, none skipped, warnings as errors.
 
 **Twenty back-to-back sorts leave the drive no time to recover, and the totals show it.** The first run finished in 56.3 s with 27.8 s of summed output-wait; the rest sat between 67 and 75 s with three to four times that wait. Phase one, the CPU-bound half, moved far less: 30.6 s to 41.2 s.
 
@@ -254,7 +254,7 @@ Measured 2026-10-02 with `ChunkSortBenchmarks` (the full job: 2 launches, 5 warm
 | **221 MiB** | 2,712.8 ± 85.6 ms | 1,342.9 ± 44.1 ms | **0.50** | 88 B / 57.3 MiB |
 | 320 MiB | 4,104.3 ± 201.7 ms | 2,597.0 ± 473.2 ms | 0.64 | 88 B / 79.5 MiB |
 
-**The radix is about twice as fast as a plain introsort with the cached-prefix comparer at the 110 and 221 MiB budgets (ratios 0.48 and 0.50, errors under 5% of the mean), well past the 10% bar, and that measurement justifies keeping it.** The ratio is 0.42–0.50 at every size with a tight error. The 166 MiB and 320 MiB rows, and the 64 MiB baseline, have wide errors from bimodal iterations on a laptop; a rerun of the 166 MiB row alone gave 2,956 ± 521 ms plain against 984 ± 69 ms radix (0.37), so that row is noise-limited, not a counter-example. The allocation column is the price: the diagnoser reports 4.6–79.5 MiB per radix sort against 88 B for the plain one (the source of that allocation was not investigated here).
+**The radix is about twice as fast as a plain introsort with the cached-prefix comparer at the 110 and 221 MiB budgets (ratios 0.48 and 0.50, errors under 5% of the mean), well past the 10% bar, and that measurement justifies keeping it.** The ratio is 0.42–0.50 at every size with a tight error. The 166 MiB and 320 MiB rows, and the 64 MiB baseline, have wide errors from bimodal iterations on a laptop; a rerun of the 166 MiB row alone gave 2,956 ± 521 ms plain against 984 ± 69 ms radix (0.37), so that row is noise-limited, not a counter-example. The allocation column is the price: the diagnoser reports 4.6–79.5 MiB per radix sort against 88 B for the plain one (the source is the leaf sorts, not buffer use: `ChunkSorter` calls the span `Sort` with a struct comparer at its leaves, and that overload boxes the struct and wraps it in a delegate, 88 B per call, the same 88 B the plain baseline pays once. Counting leaf calls in a scratch copy gave 54,358 at 16 MiB and 136,086 at 32 MiB, and 54,358 × 88 B = 4.56 MiB and 136,086 × 88 B = 11.42 MiB, matching the 4.6 and 11.4 MiB reported and the allocated bytes measured directly. The baseline stays fair, because both rows use the same mechanism).
 
 ---
 

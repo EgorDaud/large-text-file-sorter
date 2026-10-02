@@ -1033,4 +1033,26 @@ public sealed class SortRoundTripTests : IDisposable
         Assert.False(File.Exists(outputPath));
         Assert.False(Directory.Exists(tempDirectory));
     }
+
+    [Fact]
+    [Trait("Case", "ET-18")]
+    public async Task A_doubled_final_newline_is_rejected_as_an_empty_line_at_the_end_of_the_file()
+    {
+        // An empty line has no separator, so it is malformed like any other line. The
+        // region after a single final terminator is not a line (CB-05), but a second
+        // terminator makes it one, and the sort fails on the file's very last line.
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
+        File.WriteAllText(inputPath, "2. Banana\n1. Apple\n\n");
+
+        SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
+
+        MalformedLineException thrown = await Assert.ThrowsAsync<MalformedLineException>(
+            () => Program.RunAsync(options, TestContext.Current.CancellationToken)
+                .WaitAsync(BoundedWait, TestContext.Current.CancellationToken));
+
+        Assert.Equal(3, thrown.LineNumber);
+        Assert.False(File.Exists(outputPath));
+    }
 }

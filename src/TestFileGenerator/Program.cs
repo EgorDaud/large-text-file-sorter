@@ -25,7 +25,7 @@ internal static class Program
 
         Options:
           --size             Target file size: a byte count, optionally suffixed B, KiB, MiB or GiB. Required.
-          --seed             Seed for the random source. The same seed reproduces byte-identical output. Default 0.
+          --seed             Seed for the random source. The same seed reproduces byte-identical output on the same .NET version. Default 0.
           --duplicate-ratio  Proportion of lines reusing a string part, between 0 and 1. Default 0.1.
 
         Complete lines are written until the next one would exceed the target, so the file

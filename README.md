@@ -9,7 +9,7 @@ Two console programs on .NET 10. **`TestFileGenerator`** writes a `<Number>. <St
 2. Banana is yellow                     30432. Something something something
 ```
 
-**A 100 GiB sort at a 6 GiB budget takes 313.4 s**; GNU `sort` takes 374.4 s on a 20 GiB file this one does in 54.2 s. Recorded against this snapshot: 492 passing tests, warning-free Release builds on Linux and Windows, end-to-end sorts at 20 and 100 GiB.
+**A 100 GiB sort at a 6 GiB budget takes 313.4 s**; GNU `sort` takes 374.4 s on a 20 GiB file this one does in 54.2 s. Recorded against this snapshot: 556 passing tests, warning-free Release builds on Linux and Windows, end-to-end sorts at 20 and 100 GiB.
 
 **Reviewing this?** [Run it in four commands](#quick-start) · [Open the code](#where-things-are) · [Check the numbers](#results) · [What it doesn't do](#limits)
 
@@ -43,7 +43,7 @@ At that size the sort produces a dozen or so runs — the count follows from you
 | `--pipeline` | channels | Which run-generation scheduler to use |
 | `--verify` | — | Checks `<output>` is a valid sort of `<input>`, for results too large to re-sort |
 | `--size` | — | Generator output size; accepts `B`, `KiB`, `MiB`, `GiB` or a bare byte count, here and in the sorter |
-| `--seed` | 0 | The same seed reproduces byte-identical generator output |
+| `--seed` | 0 | The same seed reproduces byte-identical generator output on the same .NET version; `System.Random`'s seeded sequence is not promised stable across major versions |
 | `--duplicate-ratio` | 0.1 | Proportion of lines drawn to share a string part, measured over the whole file. `0` means none shares with any other; any positive ratio guarantees at least one shared pair |
 
 `<input>` and `<output>` must be different files: the same path, however it is spelled, is rejected as invalid arguments (exit 3) before anything is read or written. Symlinks and hard links to the input are not detected.
@@ -62,7 +62,7 @@ At that size the sort produces a dozen or so runs — the count follows from you
 | 5 | sorter | An I/O failure after startup validation passed, such as a full disk; one `I/O error:` line on stderr |
 | 130 | both | Cancelled |
 
-An unwritable destination exits 3 for empty or single-run input, where placement reports it as a destination that cannot be replaced, and 5 when a multi-run merge fails to open the output.
+The generator has no exit 5: a failed write exits 3 as well, naming the output path, and since it stages its output an existing destination is left untouched. An unwritable destination exits 3 for empty or single-run input, where placement reports it as a destination that cannot be replaced, and 5 when a multi-run merge fails to open the output.
 
 The first Ctrl+C or SIGTERM cancels the run and exits 130 after cleanup; a second Ctrl+C ends the process immediately, without it. A cancelled generator removes its staging file. SIGHUP is not handled, so a run started under `nohup` outlives the session. Handled failures also run cleanup before exit; an abrupt termination cannot, and during a multi-run merge it can leave a partial destination file. Each phase reports progress and closing diagnostics on stderr.
 
@@ -159,8 +159,8 @@ The assignment leaves several things unspecified. Each is decided here, identica
 | Malformed input | Fail fast on the first malformed line, reporting byte offset, line number and a truncated preview. Skipping bad lines would ship a wrong answer that looks well formed. |
 | Input terminators | Both `\n` and `\r\n`, including mixed in one file; exactly one carriage return preceding the line feed is stripped. A bare carriage return ending the file is a terminator too. |
 | Output terminators | Always `\n`, so output bytes are deterministic regardless of input convention. Every line is terminated, including the last. |
-| Empty cases | An empty string part is valid and orders first; the region after the final terminator is not a line; empty input gives empty output and exit 0. |
-| Generator sizing | Complete lines until the next would exceed the requested byte size. Never overshoots, never truncates mid-line. |
+| Empty cases | An empty string part is valid and orders first; the region after the final terminator is not a line; empty input gives empty output and exit 0. An empty line has no separator and is malformed, so a file ending in a doubled newline fails with exit 1 at its last line, after the whole run. |
+| Generator sizing | Complete lines until the next would exceed the requested byte size. Never overshoots, never truncates mid-line, and can end up to one line short. |
 
 **The third comparison level** exists because two lines can tie on both stated keys while differing in their bytes: leading zeros are accepted, so `007. Apple` and `7. Apple` tie, as do `+5. Apple` and `5. Apple`. Without it their order would fall to which chunk each landed in, and chunk boundaries follow from `--memory` — so the same input under two budgets would produce different bytes. It also makes stability moot, since equality now means byte-identical.
 
@@ -193,7 +193,7 @@ Every correctness-bearing decision sits behind a plain, dependency-free seam, so
 
 `CsCheck` is the only dependency beyond Akka.Streams and xunit, and it is there for shrinking: a random failure over a few dozen lines is not actionable until reduced to the two or three that disagree.
 
-**Benchmarks** never run under `dotnet test`: `dotnet run -c Release --project benchmarks/FileSorter.Benchmarks`, with `--flatness` and `--flatness-parallel-merge` measuring the memory guarantee end to end.
+**Benchmarks** never run under `dotnet test`: `dotnet run -c Release --project benchmarks/FileSorter.Benchmarks`, with `--flatness` and `--flatness-parallel-merge` measuring the memory guarantee end to end, each size once per pipeline.
 
 **The build gate.** `Directory.Build.props` asks for `AnalysisMode=Recommended` and `EnforceCodeStyleInBuild`, and `TreatWarningsAsErrors` turns both the quality rules and the `.editorconfig` style rules into build failures — so `dotnet build -c Release` is the whole check, with no separate lint command to drift out of sync. CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs it and the tests in Release on Linux and Windows (plus a Debug test leg on Linux, so the `Debug.Assert` invariants run), because a program about file paths, byte offsets and terminators should be shown to work on both.
 

@@ -8,10 +8,11 @@ on:
     branches: [main]
   pull_request:
 
-# A newer push to the same branch or PR supersedes the run in flight. Pushes to
-# main are never cancelled, so every merged commit keeps a complete result.
+# A newer push to the same PR supersedes the run in flight. Every other event (a
+# push to main) gets a group of its own, keyed by commit, so nothing is ever cancelled
+# or replaced in the queue and every merged commit keeps a complete result.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
