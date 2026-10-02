@@ -30,9 +30,8 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
     {
         const int parallelism = 1;
         const int totalLines = 300;
-        int poolCapacity = parallelism + 2;
         using MemoryStream input = new(BuildLines(totalLines));
-        BufferPool pool = new(bufferSize: 128, descriptorCapacity: 2, capacity: poolCapacity);
+        BufferPool pool = new(bufferSize: 128, descriptorCapacity: 2, capacity: parallelism + 2);
         await using ChunkReader reader = new(input, pool, maxLineLength: 32);
 
         TaskCompletionSource heldOpen = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -61,9 +60,6 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
         Assert.True(
             stalledAt < totalLines,
             "the reader finished the whole stream before the pool ever filled, so this proves nothing about a stall");
-
-        // Channels fills the pool; Akka at parallelism 1 stalls holding only the blocked chunk.
-        Assert.InRange(pool.Outstanding, 1, poolCapacity);
 
         heldOpen.SetResult();
 

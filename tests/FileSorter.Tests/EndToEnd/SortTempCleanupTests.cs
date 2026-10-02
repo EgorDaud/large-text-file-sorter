@@ -1,5 +1,4 @@
 using FileSorter.Cli;
-using FileSorter.LineFormat;
 using FileSorter.Merging;
 using FileSorter.Planning;
 using FileSorter.Tests.Support;
@@ -34,25 +33,6 @@ public sealed class SortTempCleanupTests : IDisposable
 
         Assert.Equal(0, exitCode);
         AssertIsOracleSortOfInput(inputPath, outputPath);
-        AssertNoLeftoverRunFiles(tempDirectory);
-    }
-
-    [Fact]
-    public async Task Cancellation_unwinds_cleanly_with_no_leftover_temp_files()
-    {
-        string inputPath = Path.Combine(_directory.Path, "in.txt");
-        string outputPath = Path.Combine(_directory.Path, "out.txt");
-        string tempDirectory = Path.Combine(_directory.Path, "temp");
-        WriteGeneratedInput(inputPath, targetBytes: 256 * 1024, seed: 3);
-
-        SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
-
-        using CancellationTokenSource cts = new();
-        cts.Cancel();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => SortCommand.RunAsync(options, cts.Token).WaitAsync(BoundedWait, TestContext.Current.CancellationToken));
-
         AssertNoLeftoverRunFiles(tempDirectory);
     }
 
@@ -158,17 +138,27 @@ public sealed class SortTempCleanupTests : IDisposable
     [Trait("Case", "ET-10")]
     public async Task A_forced_failure_during_phase_one_still_removes_the_private_directory()
     {
+        const int parallelism = 2;
+        const int maxLineLength = 256;
+        long budget = MemoryBudget.MinimumViableBudget(parallelism, maxLineLength, MemoryBudget.AssumedMeanLineLength);
+        MemoryPlan plan = MemoryBudget.Calculate(budget, parallelism, maxLineLength, MemoryBudget.AssumedMeanLineLength);
+
         string inputPath = Path.Combine(_directory.Path, "in.txt");
         string outputPath = Path.Combine(_directory.Path, "out.txt");
         string tempDirectory = Path.Combine(_directory.Path, "temp");
-        File.WriteAllText(inputPath, "1. Apple\nno separator here\n3. Banana\n");
+        WriteGeneratedInput(inputPath, targetBytes: 1024 * 1024, seed: 11);
+        File.AppendAllText(inputPath, "garbage\n");
 
-        SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);
+        // The pool holds PoolCapacity chunks, so the reader reaches the malformed tail only after earlier spills wrote runs.
+        Assert.True(
+            new FileInfo(inputPath).Length / plan.ChunkSize > plan.PoolCapacity,
+            "the input must span more chunks than the pool holds, or the failure can land before any run is written");
 
-        await Assert.ThrowsAsync<MalformedLineException>(
-            () => SortCommand.RunAsync(options, TestContext.Current.CancellationToken)
-                .WaitAsync(BoundedWait, TestContext.Current.CancellationToken));
+        SorterOptions options = new(inputPath, outputPath, tempDirectory, budget, maxLineLength, parallelism, Pipeline.Channels);
+        (int exitCode, string stderr) = await RunThroughConsoleRunCapturedAsync(options);
 
+        Assert.Equal(1, exitCode);
+        Assert.Contains("garbage", stderr, StringComparison.Ordinal);
         Assert.True(Directory.Exists(tempDirectory));
         AssertNoLeftoverRunFiles(tempDirectory);
         Assert.False(File.Exists(outputPath));

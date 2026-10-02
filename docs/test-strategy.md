@@ -67,7 +67,7 @@ Leading zeros and an explicit `+` let two lines tie on both stated keys while di
 
 ### Proving the 100 GiB claim at small scale
 
-The claim is that the peak working set depends on configuration alone. Given that, capacity is arithmetic plus disk, and a real 100 GiB run only confirms it. The line-length limit is what bounds the reader's carry-over, the last input-dependent state on the read path.
+The claim is that the program's buffers depend on configuration alone. Given that, capacity is arithmetic plus disk, and a real 100 GiB run only confirms it. The line-length limit is what bounds the reader's carry-over, the last input-dependent state on the read path.
 
 1. Flat working set: `--flatness` (a benchmark mode, outside the test gate) sorts about 1, 10 and 100 MiB at a fixed 16 MiB budget, each in a fresh process, sampling the high-water mark. Tolerance is 60%.
 2. Forced multi-pass merge at a minimal budget: output correct and pass count equal to the planner's prediction (MP-10, ET-09, ET-04, PB-24).
@@ -535,7 +535,7 @@ A chunk is one byte buffer plus a descriptor array (offset, length, number, stri
 | ET-07 | Output named `run-00000001.tmp` | Correct output |
 | ET-08 | Two concurrent sorts, same `--temp` | Both correct; nothing left |
 | ET-09 | Minimum budget, several runs | Multi-pass; private directory removed |
-| ET-10 | Malformed line | Throws; private directory removed; no output |
+| ET-10 | Malformed last line after several runs have spilled | Exit 1; private directory removed; no output |
 | ET-11 | Empty input, read-only output | Exit 3 naming the output; bytes kept |
 | ET-12 | One run, read-only output | Exit 3 naming the output; bytes kept |
 | ET-13 | One run, stale unlocked output | Replaced |

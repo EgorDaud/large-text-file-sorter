@@ -4,7 +4,7 @@ namespace FileSorter.Cli;
 
 internal static class Preflight
 {
-    internal static FileInfo ValidateReadableFile(string path, string role)
+    public static FileInfo ValidateReadableFile(string path, string role)
     {
         FileInfo info = new(path);
         if (!info.Exists)
@@ -24,14 +24,14 @@ internal static class Preflight
         return info;
     }
 
-    internal static string DirectoryOf(string path)
+    public static string DirectoryOf(string path)
     {
         string? directory = Path.GetDirectoryName(path);
         return string.IsNullOrEmpty(directory) ? "." : directory;
     }
 
     // Probe a sibling, never the output itself, so validation cannot truncate an existing output.
-    internal static void ValidateOutputDirectory(string directory)
+    public static void ValidateOutputDirectory(string directory)
     {
         if (!Directory.Exists(directory))
         {
@@ -54,7 +54,7 @@ internal static class Preflight
         }
     }
 
-    internal static TemporaryRunSet CreateTemporaryRunSet(string tempDirectory)
+    public static TemporaryRunSet CreateTemporaryRunSet(string tempDirectory)
     {
         try
         {

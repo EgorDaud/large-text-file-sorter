@@ -29,13 +29,12 @@ public sealed class BufferPoolTests
         PooledBuffer held = await pool.AcquireAsync(TestContext.Current.CancellationToken);
 
         Task<PooledBuffer> pending = pool.AcquireAsync(TestContext.Current.CancellationToken).AsTask();
-        Task completedFirst = await Task.WhenAny(pending, Task.Delay(BoundedWait, TestContext.Current.CancellationToken));
 
-        Assert.NotSame(pending, completedFirst);
         Assert.False(pending.IsCompleted);
+        Assert.Equal(1, pool.Outstanding);
 
         held.Dispose();
-        (await pending).Dispose();
+        (await pending.WaitAsync(BoundedWait, TestContext.Current.CancellationToken)).Dispose();
     }
 
     [Fact]

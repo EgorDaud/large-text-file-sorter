@@ -509,7 +509,7 @@ A cancelled sort leaves no temporary files, which relies on D16. Progress goes t
 
 | # | Decision | Reason |
 |---|---|---|
-| D1 | Both run-generation strategies ship, chosen with `--pipeline`, default `channels` | Two implementations earn the seam and give the benchmark a baseline. Channels is the default because phase one is at parity (31.7 s against 31.4 s at 20 GiB) with no actor system. Akka remains for its composition and failure semantics |
+| D1 | Both run-generation strategies ship, chosen with `--pipeline`, default `channels` | Two implementations earn the seam and give the benchmark a baseline. Channels is the default: no actor system, and Akka measured 3.3% slower on phase one (measurements 4.1). Akka remains for its composition and failure semantics |
 | D2 | `LineCursor`, not `LineParser`, enforces the maximum line length | The component that bounds the carry-over enforces the bound |
 | D3 | A private loser tree, not `PriorityQueue` | At most ⌈log2 k⌉ direct comparisons per line, against a sift-down and sift-up through a boxed comparer |
 | D4 | Hand-written argument parsing | One fewer dependency |

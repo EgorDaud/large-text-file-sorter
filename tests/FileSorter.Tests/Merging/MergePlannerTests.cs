@@ -33,8 +33,7 @@ public sealed class MergePlannerTests
     [Trait("Case", "MP-03")]
     public void Plans_two_passes_when_the_run_count_just_exceeds_the_fan_in()
     {
-        // fanIn + 1 is exactly the shape that forces a group of size one under naive
-        // division; the leftover run must be carried forward instead.
+        // fanIn + 1 runs would leave a group of one under naive division.
         IReadOnlyList<MergePass> passes = MergePlanner.Plan(runCount: 5, fanIn: 4);
 
         Assert.Equal(2, passes.Count);
@@ -59,11 +58,11 @@ public sealed class MergePlannerTests
             Assert.DoesNotContain(pass.Groups, group => group.Length == 1);
 
             int next = pass.Groups.Count + pass.CarriedForward.Count;
-            Assert.True(next < count); // each pass strictly reduces the run count
+            Assert.True(next < count);
             count = next;
         }
 
-        Assert.Equal(1, count); // the final pass produces exactly one output
+        Assert.Equal(1, count);
     }
 
     [Fact]
@@ -95,11 +94,11 @@ public sealed class MergePlannerTests
 
     [Theory]
     [Trait("Case", "MP-08")]
-    [InlineData(4, 3)]   // remainder 1
-    [InlineData(7, 2)]   // remainder 1
-    [InlineData(10, 3)]  // remainder 1
-    [InlineData(13, 4)]  // remainder 1
-    [InlineData(101, 10)] // remainder 1, and large enough to span several passes
+    [InlineData(4, 3)]
+    [InlineData(7, 2)]
+    [InlineData(10, 3)]
+    [InlineData(13, 4)]
+    [InlineData(101, 10)]
     public void Never_emits_a_group_of_size_one(int runCount, int fanIn)
     {
         Assert.Equal(1, runCount % fanIn);

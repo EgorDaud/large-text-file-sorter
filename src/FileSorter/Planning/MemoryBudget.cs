@@ -5,7 +5,7 @@ namespace FileSorter.Planning;
 internal static class MemoryBudget
 {
     // Sizes descriptor arrays only; 32 keeps byte buffers filling first on the generated data.
-    internal const int AssumedMeanLineLength = 32;
+    public const int AssumedMeanLineLength = 32;
 
     // Up to MergeParallelism * MaxMergeFanIn run handles can be open at once.
     private const int MaxMergeFanIn = 2048;
@@ -41,7 +41,7 @@ internal static class MemoryBudget
             $"{parallelism}. {minimum}");
     }
 
-    internal static bool TryCalculate(
+    public static bool TryCalculate(
         long budgetBytes, int parallelism, int maxLineLength, int assumedMeanLineLength, out MemoryPlan plan)
     {
         if (parallelism <= 0)
@@ -161,7 +161,7 @@ internal static class MemoryBudget
     }
 
     // Bisection is valid only because viability is monotone in the budget.
-    internal static bool TryFindMinimumViableBudget(
+    public static bool TryFindMinimumViableBudget(
         int parallelism, int maxLineLength, int assumedMeanLineLength, out long minimumBudget)
     {
         minimumBudget = 0;
@@ -189,13 +189,13 @@ internal static class MemoryBudget
         return true;
     }
 
-    internal static long MinimumViableBudget(int parallelism, int maxLineLength, int assumedMeanLineLength) =>
+    public static long MinimumViableBudget(int parallelism, int maxLineLength, int assumedMeanLineLength) =>
         TryFindMinimumViableBudget(parallelism, maxLineLength, assumedMeanLineLength, out long minimumBudget)
             ? minimumBudget
             : throw new ArgumentOutOfRangeException(nameof(maxLineLength), maxLineLength,
                 $"No memory budget can support a maximum line length of {maxLineLength} bytes at parallelism {parallelism}.");
 
-    internal static int AssumedMeanFor(int maxLineLength) => Math.Min(AssumedMeanLineLength, maxLineLength);
+    public static int AssumedMeanFor(int maxLineLength) => Math.Min(AssumedMeanLineLength, maxLineLength);
 
     private static int MinimumWindow(int maxLineLength)
     {

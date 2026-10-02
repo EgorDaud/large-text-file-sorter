@@ -203,7 +203,7 @@ public sealed class TemporaryRunSetTests : IDisposable
 
         runs.Dispose();
 
-        Assert.Empty(Directory.GetFiles(_directory));
+        Assert.Empty(Directory.GetFileSystemEntries(_directory));
     }
 
     [Fact]

@@ -53,7 +53,7 @@ public sealed class MergeExecutorTests : IDisposable
         string[] lines = File.ReadAllText(outputPath).Split('\n', StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal(expected, lines);
 
-        Assert.Equal([outputPath], Directory.GetFiles(_directory.Path));
+        Assert.Equal([outputPath], Directory.GetFiles(_directory.Path, "*", SearchOption.AllDirectories));
     }
 
     [Fact]

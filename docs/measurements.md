@@ -72,7 +72,7 @@ Slice imbalance was 1.01x in all but the last run (1.00x). Every run took one me
 
 **No budget effect is visible between 6 and 8 GiB.** Phase one averages 166.7 s over three runs at 8 GiB and 169.5 s over five at 6 GiB, 1.7% apart, inside per-budget spreads of 21.6 s and 35.3 s. Totals are dominated by output-wait: the 448.2 s and 304.7 s runs do identical merge work.
 
-**The effect exists but is small.** `MemoryBudget.Calculate` makes `ChunkSize` linear in the budget with no ceiling. `ChunkSortBenchmarks`, single-threaded:
+**The effect exists but is small.** `MemoryBudget.Calculate` makes `ChunkSize` linear in the budget with no ceiling. `ChunkSortBenchmarks`, single-threaded, measured 2026-09-09 on the earlier ten-word-vocabulary input; absolute times are not comparable with the current-input run in [section 6](#the-radix-against-a-plain-introsort), but the trend matches: per-MiB cost there also rises with chunk size, from 3.8 ms at 16 MiB to 6.1 ms at 221 MiB.
 
 | Chunk | Mean | ms per MiB | vs previous |
 |---|---|---|---|
@@ -244,7 +244,7 @@ A cap of 32 is faster on real data but costs +20.0% on the 200-byte shape, so 16
 
 ## 7. The memory-flatness matrices
 
-`-- --flatness` sorts roughly 1, 10 and 100 MiB at a fixed 16 MiB budget, each size and pipeline in a fresh process so one size's allocation churn cannot inflate the next. Peak is the running maximum of `GC.GetTotalMemory(false)`, sampled every 5 ms. The first table predates the per-pipeline split and is Channels only.
+`-- --flatness` sorts roughly 1, 10 and 100 MiB at a fixed 16 MiB budget, each size and pipeline in a fresh process so one size's allocation churn cannot inflate the next. Each child runs the shipped `SortCommand.RunAsync`. Peak is the running maximum of `GC.GetTotalMemory(false)`, sampled every 5 ms. The first table predates the per-pipeline split and is Channels only.
 
 | Input | Peak managed heap | Peak vs budget |
 |---|---|---|

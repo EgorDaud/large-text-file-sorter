@@ -8,7 +8,7 @@ internal static class VolumeCapacity
     private static readonly StringComparison VolumeRootComparison =
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
-    internal static void Check(long inputSizeBytes, string tempDirectory, string outputDirectory)
+    public static void Check(long inputSizeBytes, string tempDirectory, string outputDirectory)
     {
         long? tempFreeBytes = ProbeFreeSpace(tempDirectory);
         long? outputFreeBytes = ProbeFreeSpace(outputDirectory);

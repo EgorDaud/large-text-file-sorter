@@ -8,7 +8,7 @@ namespace FileSorter.RunGeneration;
 internal static class RunGenerationDriver
 {
     // Phase-one buffers stay scoped here so they are collectable before the merge allocates.
-    internal static async Task<IReadOnlyList<string>> GenerateRunsAsync(
+    public static async Task<IReadOnlyList<string>> GenerateRunsAsync(
         FileInfo inputInfo,
         int maxLineLength,
         MemoryPlan plan,

@@ -46,7 +46,7 @@ internal sealed class MergeExecutor
         if (runPaths.Count < 2)
         {
             throw new ArgumentException(
-                $"MergeExecutor merges two or more runs; a single run is moved into place by Program without a merge. Got {runPaths.Count}.",
+                $"MergeExecutor merges two or more runs; a single run is placed by RunPlacement without a merge. Got {runPaths.Count}.",
                 nameof(runPaths));
         }
 

@@ -7,12 +7,12 @@ namespace FileSorter.Cli;
 internal static class CommandLine
 {
     private const long DefaultMemoryBudgetBytes = 1L << 30;
-    internal const int DefaultMaxLineLength      = 64 * 1024;
+    public const int DefaultMaxLineLength = 64 * 1024;
 
     // A chunk must exceed maxLine + 2 bytes yet fit one array, so no budget can satisfy a larger value.
-    internal static readonly long MaxLineLengthCeiling = Array.MaxLength - 3;
+    public static readonly long MaxLineLengthCeiling = Array.MaxLength - 3;
 
-    internal static readonly string Usage = $"""
+    public static readonly string Usage = $"""
         Usage:
           sorter <input> <output> [--temp DIR] [--memory 1GiB] [--max-line 64KiB]
                                    [--parallelism N] [--pipeline akka|channels]
@@ -45,7 +45,7 @@ internal static class CommandLine
           130  cancelled by the operator (Ctrl+C or SIGTERM)
         """;
 
-    internal static int ReportUsageError(string error)
+    public static int ReportUsageError(string error)
     {
         Console.Error.WriteLine(error);
         Console.Error.WriteLine();
@@ -53,7 +53,7 @@ internal static class CommandLine
         return ExitCodes.InvalidArguments;
     }
 
-    internal static bool TryParseOptions(
+    public static bool TryParseOptions(
         string[] args,
         [NotNullWhen(true)] out SorterOptions? options,
         [NotNullWhen(false)] out string? error)
@@ -201,7 +201,7 @@ internal static class CommandLine
         }
     }
 
-    internal static bool TryTakePath(
+    public static bool TryTakePath(
         string argument,
         ref string? inputPath,
         ref string? outputPath,
@@ -228,7 +228,7 @@ internal static class CommandLine
         return error is null;
     }
 
-    internal static bool TryParseMaxLine(
+    public static bool TryParseMaxLine(
         string text,
         long ceiling,
         out int maxLineLength,

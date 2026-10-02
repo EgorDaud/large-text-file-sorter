@@ -4,25 +4,17 @@ namespace FileSorter.RunGeneration;
 
 internal static class ChunkSorter
 {
-    // One bucket per byte keeps the radix small; another pass handles sparse prefixes.
     private const int PrefixBucketCount = 256;
-
-    // The cached prefix covers these bytes before the radix reads the chunk buffer.
     private const int PrefixBytes = sizeof(ulong);
 
-    // Bucket 0 represents an ended string; buckets 1–256 represent byte values. The
-    // separate end marker keeps a proper prefix before an extension beginning with 0x00.
+    // Bucket 0 is an ended string, so a proper prefix sorts before an extension starting with 0x00.
     private const int StringBucketCount = 257;
 
-    // Bound radix work on long common prefixes; LineOrder preserves the final order.
-    // Depth 16 avoids excessive passes on degenerate input.
+    // Caps passes on long shared runs; the comparator finishes whatever is left.
     private const int MaxRadixDepth = 16;
 
-    // Small ranges use the BCL sort to avoid another radix counting pass.
     private const int SmallRangeThreshold = 32;
 
-    /// Sorts cached prefix bytes, then string bytes, with an MSD radix. Bucket order
-    /// follows LineOrder; final ranges use its full comparator, including raw-byte ties.
     public static void Sort(Span<LineDescriptor> lines, byte[] buffer)
     {
         if (lines.Length <= 1)
@@ -33,7 +25,7 @@ internal static class ChunkSorter
         SortRange(lines, 0, buffer, new DescriptorComparer(buffer));
     }
 
-    /// Sorts a range whose keys agree at every byte before <paramref name="depth"/>.
+    // Invariant: all keys in the range agree at every byte before depth.
     private static void SortRange(
         Span<LineDescriptor> lines, int depth, byte[] buffer, DescriptorComparer comparer)
     {
@@ -47,8 +39,7 @@ internal static class ChunkSorter
             return;
         }
 
-        // Reuse the widest radix arrays in this frame. Counting passes clear them;
-        // allocating them in the loop would grow stack use until the method returns.
+        // Outside the loop: a stackalloc inside it would grow the frame on every iteration.
         Span<int> bucketStart = stackalloc int[StringBucketCount + 1];
         Span<int> next = stackalloc int[StringBucketCount];
 
@@ -59,7 +50,6 @@ internal static class ChunkSorter
                 Span<int> prefixStart = bucketStart[..(PrefixBucketCount + 1)];
                 if (CountByPrefix(lines, depth, prefixStart) >= 0)
                 {
-                    // No split means no permutation or recursion is needed.
                     depth++;
                     continue;
                 }
@@ -81,8 +71,7 @@ internal static class ChunkSorter
             int single = CountByStringByte(lines, depth, buffer, bucketStart);
             if (single == 0)
             {
-                // Ended strings can still differ under padded prefixes, so LineOrder
-                // must finish the range.
+                // Strings ended inside the zero-padded prefix can still differ in length.
                 break;
             }
 
@@ -116,8 +105,6 @@ internal static class ChunkSorter
         lines.Sort(comparer);
     }
 
-    /// Writes bucket start offsets, ending with lines.Length. Returns the sole
-    /// occupied bucket, or -1 when the range split.
     private static int CountByPrefix(
         ReadOnlySpan<LineDescriptor> lines, int depth, Span<int> bucketStart)
     {
@@ -143,7 +130,7 @@ internal static class ChunkSorter
         return Accumulate(bucketStart, StringBucketCount, lines.Length);
     }
 
-    /// Converts counts to start offsets and returns the sole occupied bucket, or -1.
+    // Turns counts into start offsets; returns the sole occupied bucket, or -1 if the range split.
     private static int Accumulate(Span<int> bucketStart, int bucketCount, int length)
     {
         int single = -1;
@@ -160,14 +147,10 @@ internal static class ChunkSorter
         return single;
     }
 
-    // Use 0 for an ended string and byte + 1 for content after the cached prefix.
     private static int StringKey(in LineDescriptor line, int depth, byte[] buffer) =>
         depth < line.StringLength ? buffer[line.StringOffset + depth] + 1 : 0;
 
-    // American flag permutation uses O(n) moves per level without a second
-    // descriptor array. next[b] tracks each bucket's next free slot; displaced
-    // items follow their cycles until the current bucket receives its own item.
-    // bucketStart must come from the matching counting pass. Skip unsplit ranges.
+    // In-place American flag permutation; bucketStart must come from the matching counting pass.
     private static void PermuteByPrefix(
         Span<LineDescriptor> lines, int depth, Span<int> bucketStart, Span<int> next)
     {
@@ -219,7 +202,6 @@ internal static class ChunkSorter
         }
     }
 
-    // This comparer is valid only for descriptors from the captured chunk buffer.
     private readonly struct DescriptorComparer(byte[] buffer) : IComparer<LineDescriptor>
     {
         public int Compare(LineDescriptor x, LineDescriptor y) => LineOrder.Compare(in x, buffer, in y, buffer);
