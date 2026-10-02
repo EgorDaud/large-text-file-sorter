@@ -873,7 +873,7 @@ Numbers are written in canonical decimal with no leading zeros, so generated dat
 
 Composition is separable from writing: `LineComposer` writes into a caller-supplied span and `FileWriter` takes a `Stream`, so sizing and composition are testable against a `MemoryStream`.
 
-**The generator's own output follows the sorter's staging rule.** `Program.WriteToOutput`, not `FileWriter.Write`, opens a uniquely named staging file beside the requested output, writes to it, and moves it into place only once the write returns without error. `CreateStagingPath` and its cleanup are a deliberate duplicate of `Merging/StagingFile`'s — same retry count on a name collision, same report-rather-than-swallow rule — rather than a shared reference, because the two programs share no project. A failure to replace the requested output this way is reported by name at exit 3 rather than left to crash unhandled.
+**The generator's own output follows the sorter's staging rule.** `StagedOutput.Write`, not `FileWriter.Write`, opens a uniquely named staging file beside the requested output, writes to it, and moves it into place only once the write returns without error. `CreateStagingPath` and its cleanup are a deliberate duplicate of `Merging/StagingFile`'s — same retry count on a name collision, same report-rather-than-swallow rule — rather than a shared reference, because the two programs share no project. A failure to replace the requested output this way is reported by name at exit 3 rather than left to crash unhandled.
 
 ---
 

@@ -3,8 +3,8 @@ using Xunit;
 
 namespace TestFileGenerator.Tests;
 
-// Program.WriteToOutput, not Main: Main is a private entry point and cannot be driven
-// directly from a test, the way FileSorter's own Program.RunAsync can be. WriteToOutput
+// StagedOutput.Write, not Main: Main is a private entry point and cannot be driven
+// directly from a test, the way FileSorter's own Program.RunAsync can be. StagedOutput.Write
 // carries the whole write-then-replace behaviour Main delegates to, so exercising it
 // here is exercising the real path.
 public sealed class OutputPlacementTests : IDisposable
@@ -35,7 +35,7 @@ public sealed class OutputPlacementTests : IDisposable
         GeneratorOptions options = new(outputPath, TargetBytes: 256, Seed: 1, DuplicateRatio: 0.1);
         LineComposer composer = new(options);
 
-        long written = Program.WriteToOutput(options, composer, static _ => { }, TestContext.Current.CancellationToken);
+        long written = StagedOutput.Write(options, composer, static _ => { }, TestContext.Current.CancellationToken);
 
         Assert.True(written > 0);
         Assert.Equal(written, new FileInfo(outputPath).Length);
@@ -62,7 +62,7 @@ public sealed class OutputPlacementTests : IDisposable
         using (new FileStream(outputPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
         {
             Assert.Throws<UnauthorizedAccessException>(
-                () => Program.WriteToOutput(options, composer, static _ => { }, TestContext.Current.CancellationToken));
+                () => StagedOutput.Write(options, composer, static _ => { }, TestContext.Current.CancellationToken));
         }
 
         Assert.Equal(previousContent, File.ReadAllBytes(outputPath));
@@ -85,7 +85,7 @@ public sealed class OutputPlacementTests : IDisposable
         using CancellationTokenSource cts = new();
 
         Assert.ThrowsAny<OperationCanceledException>(
-            () => Program.WriteToOutput(options, composer, _ => cts.Cancel(), cts.Token));
+            () => StagedOutput.Write(options, composer, _ => cts.Cancel(), cts.Token));
 
         Assert.Equal(previousContent, File.ReadAllBytes(outputPath));
         Assert.Empty(Directory.GetFiles(_directory, "*.partial"));

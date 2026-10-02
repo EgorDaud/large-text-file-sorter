@@ -518,7 +518,7 @@ That last point has a testing consequence worth stating: because generated numbe
 
 ### Generator output placement tests (GW)
 
-**Scope.** `tests/TestFileGenerator.Tests/OutputPlacementTests.cs`, driving `Program.WriteToOutput` directly -- `Main` is a private entry point and cannot be driven from a test the way the sorter's own `Program.RunAsync` can, so this method carries the whole write-then-replace behaviour `Main` delegates to. The generator's own output follows the same staging-and-move rule as the sorter's: write under a private staging name beside the requested output, move that staging file over the output only once writing finished without error, and on failure delete only the staging file.
+**Scope.** `tests/TestFileGenerator.Tests/OutputPlacementTests.cs`, driving `StagedOutput.Write` directly -- `Main` is a private entry point and cannot be driven from a test the way the sorter's own `Program.RunAsync` can, so this method carries the whole write-then-replace behaviour `Main` delegates to. The generator's own output follows the same staging-and-move rule as the sorter's: write under a private staging name beside the requested output, move that staging file over the output only once writing finished without error, and on failure delete only the staging file.
 
 | ID | Test name | Input | Expected outcome |
 |---|---|---|---|

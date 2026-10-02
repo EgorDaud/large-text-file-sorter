@@ -8,7 +8,7 @@ public sealed class CommandLineTests
     [Fact]
     public void Parsing_when_only_the_required_arguments_are_given_applies_the_documented_defaults()
     {
-        Assert.True(Program.TryParseOptions(["out.txt", "--size", "1MiB"], out GeneratorOptions? options, out _));
+        Assert.True(CommandLine.TryParseOptions(["out.txt", "--size", "1MiB"], out GeneratorOptions? options, out _));
 
         Assert.Equal(new GeneratorOptions("out.txt", 1024 * 1024, Seed: 0, DuplicateRatio: 0.1), options);
     }
@@ -16,7 +16,7 @@ public sealed class CommandLineTests
     [Fact]
     public void Parsing_when_every_option_is_given_carries_all_of_them_through()
     {
-        Assert.True(Program.TryParseOptions(
+        Assert.True(CommandLine.TryParseOptions(
             ["out.txt", "--size", "2GiB", "--seed", "42", "--duplicate-ratio", "0.25"],
             out GeneratorOptions? options,
             out _));
@@ -33,7 +33,7 @@ public sealed class CommandLineTests
     [InlineData("100gib", 100L * 1024 * 1024 * 1024)]
     public void Parsing_when_a_size_carries_a_unit_suffix_reads_it_as_binary_bytes(string size, long expected)
     {
-        Assert.True(Program.TryParseOptions(["out.txt", "--size", size], out GeneratorOptions? options, out _));
+        Assert.True(CommandLine.TryParseOptions(["out.txt", "--size", size], out GeneratorOptions? options, out _));
 
         Assert.NotNull(options);
         Assert.Equal(expected, options.TargetBytes);
@@ -56,7 +56,7 @@ public sealed class CommandLineTests
     [InlineData("Unexpected argument 'other.txt'", "out.txt", "--size", "1MiB", "other.txt")] // a second output path
     public void Parsing_when_an_argument_is_unusable_explains_which_one(string expectedMessage, params string[] args)
     {
-        Assert.False(Program.TryParseOptions(args, out GeneratorOptions? options, out string? error));
+        Assert.False(CommandLine.TryParseOptions(args, out GeneratorOptions? options, out string? error));
 
         Assert.Null(options);
         Assert.NotNull(error);
