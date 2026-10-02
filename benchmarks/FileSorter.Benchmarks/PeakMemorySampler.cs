@@ -1,7 +1,6 @@
 namespace FileSorter.Benchmarks;
 
-// Samples the managed-heap high-water mark during a run. It excludes native memory, stack
-// memory, and the OS file cache because MemoryPlan bounds managed arrays.
+// Managed heap only, because that is what MemoryPlan bounds; native memory and the file cache are excluded.
 internal sealed class PeakMemorySampler : IDisposable
 {
     private readonly Timer _timer;

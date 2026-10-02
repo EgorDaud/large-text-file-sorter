@@ -10,7 +10,6 @@ internal static class MergePlanner
                 "A fan-in below two never reduces the run count, so no plan could ever terminate.");
         }
 
-        // Zero or one run needs no merge pass.
         if (runCount <= 1)
         {
             return [];
@@ -27,7 +26,7 @@ internal static class MergePlanner
 
             int groupCount = (toGroup + fanIn - 1) / fanIn;
             int baseSize = toGroup / groupCount;
-            int oversizedGroups = toGroup % groupCount; // These groups take one extra run.
+            int oversizedGroups = toGroup % groupCount;
 
             int[][] groups = new int[groupCount][];
             int cursor = 0;

@@ -17,7 +17,7 @@ internal readonly record struct MemoryPlan(
     public static int DescriptorSize => Unsafe.SizeOf<LineDescriptor>();
 
     // One parsing slot, one prefetched slot, and one per active worker.
-    public int PoolCapacity   => Parallelism + 2;
+    public int PoolCapacity => Parallelism + 2;
 
     // Oversized carry can displace one fill of already-read bytes, held here until the next fill.
     public long PendingBytesSize => ChunkSize;

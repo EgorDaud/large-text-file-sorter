@@ -38,47 +38,48 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
 
     [Theory]
     [MemberData(nameof(StrategiesAtTwoParallelisms))]
-    public async Task Outstanding_never_exceeds_pool_capacity_when_the_reader_outpaces_its_spillers(
+    public async Task Exactly_parallelism_spills_run_at_once_when_the_reader_outpaces_its_spillers(
         Strategy strategy, int parallelism)
     {
-        // One slot per spiller, plus the chunk being read and the reader's prefetch.
-        int poolCapacity = parallelism + 2;
+        // The pool leaves one chunk beyond the spillers, so a strategy that ignores parallelism overshoots by one.
         using MemoryStream input = new(BuildLines(count: 300));
-        BufferPool pool = new(bufferSize: 128, descriptorCapacity: 5, capacity: poolCapacity);
+        BufferPool pool = new(bufferSize: 128, descriptorCapacity: 5, capacity: parallelism + 2);
         await using ChunkReader reader = new(input, pool, maxLineLength: 32);
 
+        TaskCompletionSource saturated = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int running = 0;
+        int peak = 0;
         ChunkSpill spill = async (chunk, ct) =>
         {
-            await Task.Delay(15, ct);
-            chunk.Buffer.Dispose();
-            return string.Empty;
-        };
-
-        int observedMax = 0;
-        using CancellationTokenSource sampling = new();
-        Task sampler = Task.Run(async () =>
-        {
+            int now = Interlocked.Increment(ref running);
+            InterlockedMax(ref peak, now);
             try
             {
-                while (true)
+                if (now == parallelism)
                 {
-                    InterlockedMax(ref observedMax, pool.Outstanding);
-                    await Task.Delay(1, sampling.Token);
+                    saturated.TrySetResult();
                 }
+
+                await release.Task.WaitAsync(ct);
+                return string.Empty;
             }
-            catch (OperationCanceledException)
+            finally
             {
+                Interlocked.Decrement(ref running);
+                chunk.Buffer.Dispose();
             }
-        }, TestContext.Current.CancellationToken);
+        };
 
         RunGenerationStrategy run = Resolve(strategy);
-        await run(reader, spill, parallelism, TestContext.Current.CancellationToken)
-            .WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
-        await sampling.CancelAsync();
-        await sampler;
+        Task<IReadOnlyList<string>> runTask = run(reader, spill, parallelism, TestContext.Current.CancellationToken);
 
-        Assert.True(observedMax <= poolCapacity, $"observed {observedMax} outstanding against a ceiling of {poolCapacity}");
-        Assert.True(observedMax > 1, "the scenario never put the pool under real pressure, so the ceiling assertion above proves nothing");
+        await saturated.Task.WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
+        await WaitForStableOutstandingAsync(pool, BoundedWait);
+        release.SetResult();
+        await runTask.WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
+
+        Assert.Equal(parallelism, peak);
     }
 
     [Theory]

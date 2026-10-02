@@ -8,7 +8,7 @@ namespace FileSorter.Verification;
 // The wrapping sum of FNV-1a hashes is order-independent but can collide for different multisets.
 internal static class OutputVerifier
 {
-    internal const int BaseBufferSize = 4 * 1024 * 1024;
+    public const int BaseBufferSize = 4 * 1024 * 1024;
 
     private const ulong FnvOffsetBasis = 14695981039346656037UL;
     private const ulong FnvPrime = 1099511628211UL;

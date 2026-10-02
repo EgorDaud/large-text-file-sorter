@@ -13,8 +13,8 @@ internal static class RangePartitioner
     private const int FirstProbeBytes = 8 * 1024;
 
     // Must be a power of two for AdmitWithinBudget's bit-reversed order.
-    internal const int TargetSampleLines = 4096;
-    internal const int SampleLineByteBudget = 16 * 1024 * 1024;
+    public const int TargetSampleLines = 4096;
+    public const int SampleLineByteBudget = 16 * 1024 * 1024;
 
     public static RangePartition? Locate(
         IReadOnlyList<string> runPaths, int workerCount, int maxLineLength, int parallelism, CancellationToken ct)

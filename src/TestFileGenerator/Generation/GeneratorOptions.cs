@@ -6,5 +6,5 @@ internal sealed record GeneratorOptions(
     int    Seed,
     double DuplicateRatio)
 {
-    internal const double DefaultDuplicateRatio = 0.1;
+    public const double DefaultDuplicateRatio = 0.1;
 }

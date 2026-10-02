@@ -6,7 +6,7 @@ internal static class ByteSize
 {
     private static readonly string[] SizeNames = ["B", "KiB", "MiB", "GiB"];
 
-    internal static bool TryParse(string text, out long bytes)
+    public static bool TryParse(string text, out long bytes)
     {
         bytes = 0;
         long multiplier = 1;
@@ -33,7 +33,7 @@ internal static class ByteSize
         return true;
     }
 
-    internal static string Describe(long bytes)
+    public static string Describe(long bytes)
     {
         double value = bytes;
         int name = 0;

@@ -1,8 +1,5 @@
 namespace FileSorter.Merging;
 
-// A read-only view of [start, end) in one run file. It presents the slice boundary as end
-// of stream, leaving RunCursor's prefetch and carry state unchanged. Only ReadAsync and
-// disposal are supported.
 internal sealed class RunSliceStream : SliceStream
 {
     private long _remaining;

@@ -11,7 +11,7 @@ namespace FileSorter.Cli;
 
 internal static class SortCommand
 {
-    internal static int Execute(string[] args)
+    public static int Execute(string[] args)
     {
         if (!CommandLine.TryParseOptions(args, out SorterOptions? options, out string? error))
         {
@@ -21,7 +21,7 @@ internal static class SortCommand
         return ConsoleRun.Run(ct => RunAsync(options, ct));
     }
 
-    internal static async Task<int> RunAsync(SorterOptions options, CancellationToken ct)
+    public static async Task<int> RunAsync(SorterOptions options, CancellationToken ct)
     {
         FileInfo inputInfo = Preflight.ValidateReadableFile(options.InputPath, "Input");
         MemoryPlan plan = PlanMemory(options);

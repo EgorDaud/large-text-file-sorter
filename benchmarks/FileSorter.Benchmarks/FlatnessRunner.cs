@@ -1,13 +1,8 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
-using Akka.Actor;
-using Akka.Streams;
 using FileSorter.Cli;
-using FileSorter.Infrastructure;
-using FileSorter.Merging;
 using FileSorter.Planning;
-using FileSorter.RunGeneration;
 
 namespace FileSorter.Benchmarks;
 
@@ -205,62 +200,25 @@ internal static class FlatnessRunner
         return startInfo;
     }
 
+    // Sorts through the shipped SortCommand; the plan is computed here only to report MergeParallelism.
     public static async Task<int> RunWorkerAsync(
         string inputPath, string outputPath, string runsDirectory, long memoryBudgetBytes, Pipeline pipeline)
     {
+        SorterOptions options = new(
+            inputPath, outputPath, runsDirectory, memoryBudgetBytes, MaxLineLength, Parallelism, pipeline);
+        MemoryPlan plan = MemoryBudget.Calculate(
+            memoryBudgetBytes, Parallelism, MaxLineLength, MemoryBudget.AssumedMeanFor(MaxLineLength));
+        Console.Error.WriteLine($"MergeParallelism={plan.MergeParallelism}");
+
         // Exclude startup allocations from the sampled peak.
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
 
         using PeakMemorySampler sampler = new(SampleIntervalMilliseconds);
-        using TemporaryRunSet runs = new(runsDirectory);
-
-        MemoryPlan plan = MemoryBudget.Calculate(memoryBudgetBytes, Parallelism, MaxLineLength, MemoryBudget.AssumedMeanLineLength);
-        Console.Error.WriteLine($"MergeParallelism={plan.MergeParallelism}");
-
-        using ActorSystem? system = pipeline is Pipeline.Akka ? AkkaRunGeneration.CreateQuietSystem("flatness") : null;
-        RunGenerationStrategy strategy = system is null
-            ? ChannelRunGeneration.RunAsync
-            : AkkaRunGeneration.Strategy(system.Materializer());
-
-        IReadOnlyList<string> runPaths = await GenerateRunsAsync(inputPath, plan, runs, strategy);
-
-        if (runPaths.Count == 0)
-        {
-            RunPlacement.PlaceEmpty(outputPath);
-        }
-        else if (runPaths.Count == 1)
-        {
-            RunPlacement.Place(runPaths[0], outputPath, runs);
-        }
-        else
-        {
-            // Reclaim phase-one allocations before merge buffers are allocated.
-            GC.Collect();
-
-            MergeExecutor executor = new(runs, plan, MaxLineLength);
-            await executor.ExecuteAsync(runPaths, outputPath, CancellationToken.None);
-        }
+        int exitCode = await SortCommand.RunAsync(options, CancellationToken.None);
 
         Console.WriteLine(sampler.PeakBytes.ToString(CultureInfo.InvariantCulture));
-        return 0;
+        return exitCode;
     }
-
-    // Keep phase-one objects scoped so they can be collected before merging.
-    private static async Task<IReadOnlyList<string>> GenerateRunsAsync(
-        string inputPath, MemoryPlan plan, TemporaryRunSet runs, RunGenerationStrategy strategy)
-    {
-        using FileStream input = new(
-            inputPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: FileStreams.Unbuffered,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
-
-        BufferPool pool = new(plan.ChunkSize, plan.DescriptorCapacity, plan.PoolCapacity);
-
-        await using ChunkReader reader = new(input, pool, MaxLineLength);
-        ChunkSpiller spiller = new(runs, plan.SpillBufferSize);
-
-        return await strategy(reader, spiller.SpillAsync, Parallelism, CancellationToken.None);
-    }
-
 }

@@ -6,7 +6,7 @@ namespace FileSorter.Cli;
 
 internal static class ConsoleRun
 {
-    internal static int Run(Func<CancellationToken, Task<int>> body)
+    public static int Run(Func<CancellationToken, Task<int>> body)
     {
         using ConsoleCancellation cancellation = new();
 

@@ -35,7 +35,7 @@ internal static class StagingFile
         }
     }
 
-    internal static string RandomSuffix()
+    public static string RandomSuffix()
     {
         Span<byte> bytes = stackalloc byte[4];
         RandomNumberGenerator.Fill(bytes);

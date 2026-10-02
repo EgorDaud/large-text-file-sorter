@@ -7,7 +7,7 @@ namespace FileSorter.Merging;
 
 internal static class MergeReporter
 {
-    internal static Task ReportProgressAsync(MergeExecutor executor, Stopwatch clock, CancellationToken ct) =>
+    public static Task ReportProgressAsync(MergeExecutor executor, Stopwatch clock, CancellationToken ct) =>
         ProgressReporter.TickAsync(
             () =>
             {
@@ -20,7 +20,7 @@ internal static class MergeReporter
             },
             ct);
 
-    internal static void ReportSummary(MergeExecutor executor)
+    public static void ReportSummary(MergeExecutor executor)
     {
         ReportShape(executor);
         Console.Error.WriteLine(

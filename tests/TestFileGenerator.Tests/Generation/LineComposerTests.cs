@@ -18,8 +18,6 @@ public sealed class LineComposerTests
 
         byte[] output = GeneratedOutput.Write(target);
 
-        // The upper bound catches an overshoot; the lower bound, tight to the longest line
-        // the vocabulary can produce, catches a generator that quietly stops far short.
         Assert.InRange((long)output.Length, target - LineComposer.MaxComposedLineLength, target);
     }
 
@@ -62,8 +60,6 @@ public sealed class LineComposerTests
             RepeatedShare(shared) > 0.3,
             $"Half the lines were configured to share a string part; {RepeatedShare(shared):P1} of them did.");
 
-        // Zero, not merely few: with no duplicates asked for, none arrive by coincidence
-        // either, which is what makes the ratio above a construction rather than a hope.
         Assert.Equal(0d, RepeatedShare(distinct));
     }
 
@@ -119,8 +115,7 @@ public sealed class LineComposerTests
     [Trait("Case", "GN-09")]
     public void Composing_when_the_output_is_read_back_produces_only_lines_the_grammar_accepts()
     {
-        // Parse throws on anything the settled grammar rejects, so reaching the assertions
-        // at all is most of this case.
+        // Parse throws on any line the grammar rejects.
         IReadOnlyList<GeneratedLine> lines = Lines(MediumFileBytes);
 
         Assert.NotEmpty(lines);
@@ -236,28 +231,21 @@ public sealed class LineComposerTests
         const int seed = 42;
         long tooSmall = MinimalPairByteLength(seed) - 1;
 
-        // One byte short of the guarantee's true floor -- the minimal fallback pair, not
-        // merely the ordinary one GN-14 pins -- no forced repeat is owed here, only the
-        // pre-existing rules: the ceiling is never exceeded, every line is complete, and
-        // the same seed reproduces the same bytes. This is the "file is simply too small"
-        // case named in the guarantee above, pinned so a regression that starts throwing
-        // or overshooting at this exact boundary is caught.
         byte[] first = GeneratedOutput.Write(tooSmall, duplicateRatio: 0.1, seed);
         byte[] second = GeneratedOutput.Write(tooSmall, duplicateRatio: 0.1, seed);
 
         Assert.Equal(first, second);
         Assert.True(first.LongLength <= tooSmall);
-        GeneratedOutput.Parse(first); // throws on anything the line grammar rejects
+
+        // Parse throws on any line the grammar rejects.
+        GeneratedOutput.Parse(first);
     }
 
     [Fact]
     [Trait("Case", "GN-17")]
     public void Composing_at_a_size_that_fits_two_ordinary_lines_but_not_the_drawn_pair_still_guarantees_a_repeat()
     {
-        // At 100 bytes, seed 42, the drawn pool entry and numbers are long enough that the
-        // ordinary pair does not fit, while two ordinary lines do. Only the minimal pair
-        // can carry the guarantee here: a composer that tried the drawn pair alone would
-        // produce a two-line file with no repeated string part.
+        // At 100 bytes and seed 42 the drawn pair does not fit but two ordinary lines do.
         const long targetBytes = 100;
         const int seed = 42;
 
@@ -273,12 +261,6 @@ public sealed class LineComposerTests
     [Trait("Case", "GN-18")]
     public void Composing_over_a_sweep_of_small_sizes_and_seeds_every_multi_line_file_has_a_repeated_string_part()
     {
-        // Sizes 40 through 200 in steps of 10, seeds 1 through 20: the band where the
-        // drawn pair can outgrow a target that two ordinary lines fit, GN-17's shape at
-        // every size that can show it. Every file with two or more lines must have a
-        // repeat; a file of zero or one line has nothing to converge over and is outside
-        // what the guarantee promises. One test rather than 340, so a failure names every
-        // offending (size, seed) at once and the suite's count stays a count of behaviours.
         List<string> failures = [];
         for (long targetBytes = 40; targetBytes <= 200; targetBytes += 10)
         {
@@ -295,9 +277,6 @@ public sealed class LineComposerTests
         Assert.True(failures.Count == 0, "No repeated string part at: " + string.Join("; ", failures));
     }
 
-    /// <summary>The combined byte length of the ordinary forced pair this seed's composer
-    /// draws first, measured directly against a generously large budget rather than
-    /// assumed.</summary>
     private static long OrdinaryPairByteLength(int seed)
     {
         LineComposer composer = GeneratedOutput.Composer(seed, duplicateRatio: 0.1);
@@ -310,8 +289,6 @@ public sealed class LineComposerTests
         return firstLength + secondLength;
     }
 
-    /// <summary>The guarantee's true floor for this seed: the minimal fallback pair's
-    /// combined byte length, read directly off the composer rather than assumed.</summary>
     private static long MinimalPairByteLength(int seed) =>
         GeneratedOutput.Composer(seed, duplicateRatio: 0.1).MinimalForcedPairByteLength;
 
@@ -321,7 +298,6 @@ public sealed class LineComposerTests
     private static IReadOnlyList<GeneratedLine> Lines(long targetBytes, double duplicateRatio, int seed) =>
         GeneratedOutput.Parse(GeneratedOutput.Write(targetBytes, duplicateRatio, seed));
 
-    /// <summary>The proportion of lines whose string part appears more than once.</summary>
     private static double RepeatedShare(IReadOnlyList<GeneratedLine> lines)
     {
         Dictionary<string, int> occurrences = [];

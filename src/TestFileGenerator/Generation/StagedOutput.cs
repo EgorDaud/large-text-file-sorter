@@ -6,7 +6,7 @@ internal static class StagedOutput
 {
     private const int OutputBufferBytes = 1 << 20;
 
-    internal static long Write(
+    public static long Write(
         GeneratorOptions options, LineComposer composer, Action<long> reportProgress, CancellationToken ct)
     {
         string stagingPath = StagingFile.CreatePath(options.OutputPath);

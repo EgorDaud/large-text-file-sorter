@@ -2,9 +2,9 @@ namespace FileSorter.Infrastructure;
 
 internal static class ProgressReporter
 {
-    internal const int IntervalMilliseconds = 2000;
+    public const int IntervalMilliseconds = 2000;
 
-    internal static async Task TickAsync(Func<string> line, CancellationToken ct)
+    public static async Task TickAsync(Func<string> line, CancellationToken ct)
     {
         try
         {
@@ -20,7 +20,7 @@ internal static class ProgressReporter
     }
 
     // report must swallow its own cancellation, or the await in finally throws and masks work's outcome.
-    internal static async Task<T> RunWithProgressAsync<T>(
+    public static async Task<T> RunWithProgressAsync<T>(
         Func<CancellationToken, Task> report, Func<Task<T>> work, CancellationToken ct)
     {
         using CancellationTokenSource progressCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -36,7 +36,7 @@ internal static class ProgressReporter
         }
     }
 
-    internal static async Task RunWithProgressAsync(
+    public static async Task RunWithProgressAsync(
         Func<CancellationToken, Task> report, Func<Task> work, CancellationToken ct) =>
         await RunWithProgressAsync(report, async () =>
         {

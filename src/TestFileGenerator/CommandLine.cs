@@ -7,7 +7,7 @@ namespace TestFileGenerator;
 
 internal static class CommandLine
 {
-    internal const string Usage = """
+    public const string Usage = """
         Usage:
           generator <output> --size 100GiB [--seed 42] [--duplicate-ratio 0.1]
 
@@ -20,7 +20,7 @@ internal static class CommandLine
         is never larger than asked for and never ends in a partial line.
         """;
 
-    internal static bool TryParseOptions(
+    public static bool TryParseOptions(
         string[] args,
         [NotNullWhen(true)] out GeneratorOptions? options,
         [NotNullWhen(false)] out string? error)

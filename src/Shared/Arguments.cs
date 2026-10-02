@@ -4,7 +4,7 @@ namespace Shared;
 
 internal static class Arguments
 {
-    internal static bool TryTakeValue(
+    public static bool TryTakeValue(
         string[] args,
         ref int index,
         string option,

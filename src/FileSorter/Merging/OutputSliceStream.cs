@@ -2,9 +2,7 @@ using System.Globalization;
 
 namespace FileSorter.Merging;
 
-// A range-partitioned worker's write-only view of [start, end) in the preallocated output.
-// It rejects writes beyond its slice and counts successful writes, detecting misplaced,
-// duplicated, or dropped lines that a whole-file length check cannot see.
+// The per-slice write count catches misplaced or dropped lines that a whole-file length check cannot.
 internal sealed class OutputSliceStream : SliceStream
 {
     public OutputSliceStream(Stream inner, long start, long end)
@@ -12,7 +10,6 @@ internal sealed class OutputSliceStream : SliceStream
     {
     }
 
-    // Bytes written by this worker for the slice-length check.
     public long BytesWritten { get; private set; }
 
     public override bool CanRead  => false;
@@ -29,8 +26,7 @@ internal sealed class OutputSliceStream : SliceStream
                 $"given does not match the runs it merged."));
         }
 
-        // Count only completed writes so cancellation and write failures do not inflate the
-        // downstream slice-length check.
+        // Counted after the await so a failed or cancelled write is not counted.
         await Inner.WriteAsync(buffer, ct);
         BytesWritten += buffer.Length;
     }

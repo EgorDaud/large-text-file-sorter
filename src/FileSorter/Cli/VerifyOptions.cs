@@ -6,10 +6,10 @@ namespace FileSorter.Cli;
 
 internal sealed record VerifyOptions(string InputPath, string OutputPath, int MaxLineLength)
 {
-    internal static readonly long MaxLineLengthCeiling = Array.MaxLength - OutputVerifier.BaseBufferSize;
+    public static readonly long MaxLineLengthCeiling = Array.MaxLength - OutputVerifier.BaseBufferSize;
 
     // args[0] is "--verify".
-    internal static bool TryParse(
+    public static bool TryParse(
         string[] args,
         [NotNullWhen(true)] out VerifyOptions? options,
         [NotNullWhen(false)] out string? error)

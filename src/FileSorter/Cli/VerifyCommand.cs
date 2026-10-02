@@ -5,7 +5,7 @@ namespace FileSorter.Cli;
 
 internal static class VerifyCommand
 {
-    internal static int Execute(string[] args)
+    public static int Execute(string[] args)
     {
         if (!VerifyOptions.TryParse(args, out VerifyOptions? options, out string? error))
         {
@@ -15,7 +15,7 @@ internal static class VerifyCommand
         return ConsoleRun.Run(ct => RunAsync(options, ct));
     }
 
-    internal static async Task<int> RunAsync(VerifyOptions options, CancellationToken ct)
+    public static async Task<int> RunAsync(VerifyOptions options, CancellationToken ct)
     {
         Preflight.ValidateReadableFile(options.InputPath, "Input");
         Preflight.ValidateReadableFile(options.OutputPath, "Output");
