@@ -9,7 +9,7 @@ Two console programs on .NET 10. **`TestFileGenerator`** writes a `<Number>. <St
 2. Banana is yellow                     30432. Something something something
 ```
 
-**A 100 GiB sort at a 6 GiB budget takes 313.4 s**; GNU `sort` takes 374.4 s on a 20 GiB file this one sorts in 54.2 s. Recorded against this snapshot: 576 passing tests, warning-free Release builds on Linux and Windows, end-to-end sorts at 20 and 100 GiB.
+**A 100 GiB sort at a 6 GiB budget takes 313.4 s**; GNU `sort` takes 374.4 s on a 20 GiB file this one sorts in 54.2 s. This snapshot has 575 passing tests and warning-free Release builds on Linux and Windows; the 20 and 100 GiB sorts and the GNU comparison were recorded on the 2026-09-09 build, with the `akka` pipeline.
 
 **Reviewing this?** [Run it in four commands](#quick-start) · [Open the code](#where-things-are) · [Check the numbers](#results) · [What it doesn't do](#limits)
 
@@ -119,7 +119,7 @@ phase one:  (parallelism + 2) × (chunkSize + descriptorArray) + chunkSize + par
 phase two:  mergeWorkers × fanIn × (2 × readAheadBuffer + descriptorArray) + mergeWorkers × outputBuffer + mergeMetadata  ≤ budget
 ```
 
-Both phases share one budget. At 4 GiB with the shipped defaults the solve gives 8 merge workers, a fan-in of 2,048 each and windows of 87,193 bytes: one pass over 100 GiB, with all but 410 KB of the budget used. The windows are eight times smaller than a sequential merge's on purpose, since 6.6 GiB of them would evict the page cache the runs are read through. The bounded line length keeps every line inside a chunk, which bounds the carry between reads.
+Both phases share one budget. At 4 GiB with the shipped defaults the solve gives 8 merge workers, a fan-in of 2,048 each and windows of 87,193 bytes: one pass over 100 GiB, with all but 410 KB of the budget used. Each worker's window is an eighth of a sequential merge's, so eight workers cost no more window memory than one. The bounded line length keeps every line inside a chunk, which bounds the carry between reads.
 
 **One term scales with input:** the run path list, about 110 KB at the 4 GiB target but roughly 25 MB for a 4 MiB budget sorting 100 GiB. **And it bounds buffers, not process working set** (see [Results](#results)).
 
@@ -149,7 +149,7 @@ Both are `--verify` clean, on one Windows machine with input, temporary files an
 [docs/measurements.md](docs/measurements.md) has the hardware, per-run diagnostics, GNU methodology and memory-flatness matrices. Three findings there qualify the table:
 
 - **The 20 GiB row is the fastest of ten consecutive runs**, on a rested drive; the median was 69.9 s, the gap being output-wait.
-- **The merge tracks the drive, not the code**: summed output-wait ranged from 279.5 s to 1325.0 s across eight otherwise identical 100 GiB runs, and wall clock followed.
+- **The merge tracks the drive, not the code**: summed output-wait ranged from 279.5 s to 1325.0 s across eight 100 GiB runs at 6 and 8 GiB budgets, and wall clock followed.
 - **Peak working set runs 1.8–10.0% above `--memory`**, because the guarantee bounds buffers, not the process. The 100 GiB input repeats one 20 GiB block, so it is duplicate-heavy rather than representative.
 
 ---
@@ -200,7 +200,7 @@ Correctness-bearing logic sits behind plain seams (pure functions over spans, `S
 
 **The highest-value test** runs the full pipeline on a random file and asserts byte-identity with a naive in-memory reference sort, which catches wrong order, lost or duplicated lines, mangled bytes and wrong terminators alike. The reference **does not call the production comparator**, so a comparator defect cannot cancel out. Output is also asserted identical across two budgets, two degrees of parallelism, both pipelines and all four final-line terminations: the cheapest race detector in the suite.
 
-`CsCheck` is the only dependency beyond Akka.Streams and xunit, for shrinking: a random failure is not actionable until reduced to the two or three lines that disagree.
+Beyond Akka.Streams, xunit and BenchmarkDotNet (benchmarks only), the one dependency is `CsCheck`, for shrinking: a random failure is not actionable until reduced to the two or three lines that disagree.
 
 **Benchmarks** run outside `dotnet test`: `dotnet run -c Release --project benchmarks/FileSorter.Benchmarks`, plus `--flatness` and `--flatness-parallel-merge` to measure the memory guarantee end to end.
 
@@ -214,4 +214,4 @@ Phase one's orchestration has two interchangeable implementations behind one del
 
 **The buffer pool bounds in-flight work in both**: its `parallelism + 2` slots block the reader before either scheduler's own bound applies, so the backpressure tests assert on outstanding pool buffers. Akka.Streams supplies composition and failure semantics, not memory bounding, and running both pipelines exposed two asymmetries. **Exception type:** Akka wraps a stage failure in an `AggregateException` where `await` unwraps the Channels path, so without a test pinning both, one corrupt file would give different exit codes per pipeline. **Completion:** Akka's task completes the instant the graph faults while sibling spills keep writing, so that pipeline tracks every read and spill it starts, which `Parallel.ForEachAsync` gives Channels for free.
 
-**The default is `channels`: no third-party dependency, and nothing measurable given up.** The isolated comparison in [measurements](docs/measurements.md) puts Akka at about 3% of phase one at 20 GiB, and an interleaved re-run measured parity (31.7 s against 31.4 s, inside that run's noise). `--pipeline akka` remains the opt-in for its composition and failure semantics, not for speed.
+**The default is `channels`: no third-party dependency, and nothing measurable given up.** The interleaved ten-run comparison in [measurements](docs/measurements.md) (section 4.1) puts Akka 3.3% slower on phase one at 20 GiB. `--pipeline akka` remains the opt-in for its composition and failure semantics, not for speed.

@@ -244,7 +244,7 @@ A cap of 32 is faster on real data but costs +20.0% on the 200-byte shape, so 16
 
 ## 7. The memory-flatness matrices
 
-`-- --flatness` sorts roughly 1, 10 and 100 MiB at a fixed 16 MiB budget, each size and pipeline in a fresh process so one size's allocation churn cannot inflate the next. Peak is the running maximum of `GC.GetTotalMemory(false)`, sampled every 5 ms. The first table predates the per-pipeline split and is Channels only.
+`-- --flatness` sorts roughly 1, 10 and 100 MiB at a fixed 16 MiB budget, each size and pipeline in a fresh process so one size's allocation churn cannot inflate the next. Each child runs the shipped `SortCommand.RunAsync`. Peak is the running maximum of `GC.GetTotalMemory(false)`, sampled every 5 ms. The first table predates the per-pipeline split and is Channels only.
 
 | Input | Peak managed heap | Peak vs budget |
 |---|---|---|
