@@ -240,6 +240,22 @@ Three instruments over real 110.7 MiB chunks of the 20 GiB file at the target bu
 
 Every range the descent enters on such input is a block of byte-identical keys — exactly what the depth cap bounds. A cap of 32 is faster on real data but costs +20.0% on the 200-byte shape where 16 costs +6.2%, which is why 16 ships. Real chunks have 48 distinct first bytes, not one, which is also why these instruments avoid a synthetic vocabulary.
 
+### The radix against a plain introsort
+
+Measured 2026-10-02 with `ChunkSortBenchmarks` (the full job: 2 launches, 5 warm-up and 20 measured iterations, about 17 minutes) on the generator's own input through `SyntheticInput`, seed 20260907, AMD Ryzen 7 7840HS, .NET 10.0.11, one descriptor-array copy per iteration. `PlainIntrosort` is the baseline: `Span<LineDescriptor>.Sort` with a struct comparer over the same `LineOrder.Compare` and cached prefix, no bucketing in front of it. `Sort` is the shipped `ChunkSorter.Sort`.
+
+| Chunk | Plain introsort (mean ± error) | `ChunkSorter.Sort` (mean ± error) | Ratio | Allocated, plain / radix |
+|---|---|---|---|---|
+| 16 MiB | 130.7 ± 2.8 ms | 61.0 ± 1.5 ms | 0.47 | 88 B / 4.6 MiB |
+| 32 MiB | 297.8 ± 11.9 ms | 129.6 ± 4.6 ms | 0.44 | 88 B / 11.4 MiB |
+| 64 MiB | 729.1 ± 117.0 ms | 286.6 ± 7.3 ms | 0.42 | 88 B / 21.5 MiB |
+| **110 MiB** | 1,155.1 ± 27.5 ms | 554.9 ± 15.1 ms | **0.48** | 88 B / 32.3 MiB |
+| **166 MiB** | 1,805.4 ± 46.8 ms | 1,599.1 ± 265.0 ms | 0.89 (see below) | 88 B / 44.8 MiB |
+| **221 MiB** | 2,712.8 ± 85.6 ms | 1,342.9 ± 44.1 ms | **0.50** | 88 B / 57.3 MiB |
+| 320 MiB | 4,104.3 ± 201.7 ms | 2,597.0 ± 473.2 ms | 0.64 | 88 B / 79.5 MiB |
+
+**The radix is about twice as fast as a plain introsort with the cached-prefix comparer at the 110 and 221 MiB budgets (ratios 0.48 and 0.50, errors under 5% of the mean), well past the 10% bar, and that measurement justifies keeping it.** The ratio is 0.42–0.50 at every size with a tight error. The 166 MiB and 320 MiB rows, and the 64 MiB baseline, have wide errors from bimodal iterations on a laptop; a rerun of the 166 MiB row alone gave 2,956 ± 521 ms plain against 984 ± 69 ms radix (0.37), so that row is noise-limited, not a counter-example. The allocation column is the price: the diagnoser reports 4.6–79.5 MiB per radix sort against 88 B for the plain one (the source of that allocation was not investigated here).
+
 ---
 
 ## 7. The memory-flatness matrices

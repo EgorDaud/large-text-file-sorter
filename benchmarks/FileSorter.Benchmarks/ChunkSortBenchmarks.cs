@@ -105,6 +105,20 @@ public class ChunkSortBenchmarks
     [IterationSetup]
     public void IterationSetup() => _sourceDescriptors.AsSpan().CopyTo(_workingDescriptors);
 
+    /// The baseline the radix has to beat: the same descriptors, the same buffer and the
+    /// same LineOrder.Compare (cached prefix first, string bytes on a tie), through the
+    /// BCL introsort alone with no bucketing pass in front of it. A struct comparer, as
+    /// in ChunkSorter, so the call is devirtualised in both rows and neither pays for an
+    /// interface dispatch the other avoids.
+    [Benchmark(Baseline = true)]
+    public void PlainIntrosort() =>
+        _workingDescriptors.AsSpan(0, _lineCount).Sort(new DescriptorComparer(_buffer));
+
     [Benchmark]
     public void Sort() => ChunkSorter.Sort(_workingDescriptors.AsSpan(0, _lineCount), _buffer);
+
+    private readonly struct DescriptorComparer(byte[] buffer) : IComparer<LineDescriptor>
+    {
+        public int Compare(LineDescriptor x, LineDescriptor y) => LineOrder.Compare(in x, buffer, in y, buffer);
+    }
 }
