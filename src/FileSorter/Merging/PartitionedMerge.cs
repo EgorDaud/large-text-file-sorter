@@ -60,41 +60,57 @@ internal sealed class PartitionedMerge
 
         Stopwatch splitClock = Stopwatch.StartNew();
         RangePartition? located = RangePartitioner.Locate(runPaths, workers, _maxLineLength, _plan.Parallelism, ct);
-        splitClock.Stop();
-        double splitterSeconds = splitClock.Elapsed.TotalSeconds;
+        PartitionStats declined = new(1, splitClock.Elapsed.TotalSeconds, 0, false, 0, 0);
 
         if (located is not { } partition)
         {
-            Stats = new PartitionStats(1, splitterSeconds, 0, false, 0, 0);
+            Stats = declined;
             return false;
         }
 
         // Repeated splitters leave workers 0 to N-2 an empty slice and the last worker
         // nearly everything, with a window sized for N workers. Decide before the output is
         // preallocated, so the sequential path starts from an untouched output.
-        double imbalance = partition.Imbalance;
-        if (double.IsPositiveInfinity(imbalance))
+        if (double.IsPositiveInfinity(partition.Imbalance))
         {
-            Stats = new PartitionStats(1, splitterSeconds, imbalance, false, 0, 0);
+            Stats = declined with { Imbalance = partition.Imbalance };
             return false;
         }
 
-        Stats = new PartitionStats(workers, splitterSeconds, imbalance, false, 0, 0);
+        Stats = declined with { Workers = workers, Imbalance = partition.Imbalance };
 
-        // Preallocate once so worker offsets are stable and no worker extends the file.
-        bool sparse;
-        using (FileStream preallocate = new(
-                   outputPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, bufferSize: FileStreams.Unbuffered))
-        {
-            // The output path is now touched even if later setup fails.
-            OutputOpened = true;
+        bool sparse = PreallocateOutput(outputPath, partition.TotalBytes);
+        (long[] written, double[] seconds) = await RunWorkersAsync(runPaths, outputPath, partition, ct);
+        Stats = Stats.Value with { Sparse = sparse, QuickestWorkerSeconds = seconds.Min(), SlowestWorkerSeconds = seconds.Max() };
 
-            // Mark sparse before SetLength so nonzero-offset workers create holes instead
-            // of forcing NTFS to zero-fill up to their first write. Failure is optional and
-            // leaves the ordinary preallocated-file behavior.
-            sparse = SparseFile.TryMarkSparse(preallocate.SafeFileHandle);
-            preallocate.SetLength(partition.TotalBytes);
-        }
+        VerifyWrites(written, partition, outputPath);
+        FinishOutput(outputPath, sparse, runPaths);
+        return true;
+    }
+
+    // Preallocate once so worker offsets are stable and no worker extends the file.
+    // Returns whether the output was marked sparse.
+    private bool PreallocateOutput(string outputPath, long totalBytes)
+    {
+        using FileStream preallocate = new(
+            outputPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, bufferSize: FileStreams.Unbuffered);
+
+        // The output path is now touched even if later setup fails.
+        OutputOpened = true;
+
+        // Mark sparse before SetLength so nonzero-offset workers create holes instead
+        // of forcing NTFS to zero-fill up to their first write. Failure is optional and
+        // leaves the ordinary preallocated-file behavior.
+        bool sparse = SparseFile.TryMarkSparse(preallocate.SafeFileHandle);
+        preallocate.SetLength(totalBytes);
+        return sparse;
+    }
+
+    // Runs one MergeSliceAsync per worker and returns each worker's byte count and time.
+    private async Task<(long[] Written, double[] Seconds)> RunWorkersAsync(
+        IReadOnlyList<string> runPaths, string outputPath, RangePartition partition, CancellationToken ct)
+    {
+        int workers = partition.WorkerCount;
 
         // Cancel sibling workers after a failure, then preserve the original non-cancellation
         // cause rather than a sibling's resulting cancellation.
@@ -139,12 +155,15 @@ internal sealed class PartitionedMerge
             throw;
         }
 
-        Stats = new PartitionStats(workers, splitterSeconds, imbalance, sparse, seconds.Min(), seconds.Max());
+        return (written, seconds);
+    }
 
-        // Per-worker and aggregate checks, with OutputSliceStream's bound, detect writes
-        // into a neighboring range that a whole-file length check misses.
+    // Per-worker and aggregate checks, with OutputSliceStream's bound, detect writes
+    // into a neighboring range that a whole-file length check misses.
+    private static void VerifyWrites(long[] written, RangePartition partition, string outputPath)
+    {
         long total = 0;
-        for (int w = 0; w < workers; w++)
+        for (int w = 0; w < written.Length; w++)
         {
             if (written[w] != partition.SliceBytes[w])
             {
@@ -161,7 +180,11 @@ internal sealed class PartitionedMerge
             throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture,
                 $"The partitioned merge wrote {total} bytes to '{outputPath}' but predicted {partition.TotalBytes}."));
         }
+    }
 
+    // Clears the sparse mark and deletes the merged runs.
+    private void FinishOutput(string outputPath, bool sparse, IReadOnlyList<string> runPaths)
+    {
         // Checks prove every byte is written, so clearing sparse is metadata-only. A failure
         // to reopen or clear leaves a correct output and must not fail the sort.
         if (sparse)
@@ -183,8 +206,6 @@ internal sealed class PartitionedMerge
         {
             _runs.Delete(path);
         }
-
-        return true;
     }
 
     // Merges every run's slice into one worker output range. Workers use FileShare.Read so
