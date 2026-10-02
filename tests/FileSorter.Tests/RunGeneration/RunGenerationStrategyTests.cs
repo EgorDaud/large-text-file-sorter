@@ -4,7 +4,9 @@ using Akka.Streams;
 using FileSorter.LineFormat;
 using FileSorter.RunGeneration;
 using FileSorter.Startup;
+using FileSorter.Tests.Support;
 using Xunit;
+using static FileSorter.Tests.Support.TestTimeouts;
 
 namespace FileSorter.Tests.RunGeneration;
 
@@ -14,10 +16,6 @@ namespace FileSorter.Tests.RunGeneration;
 // holds for one scheduler and not the other is a defect, not a library quirk.
 public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
 {
-    // An upper bound for a saturated thread pool, not an expectation of how long a run
-    // takes: it turns a hung strategy into a failure instead of a stalled suite.
-    private static readonly TimeSpan BoundedWait = TimeSpan.FromSeconds(15);
-
     private readonly AkkaFixture _akka;
 
     public RunGenerationStrategyTests(AkkaFixture akka)
@@ -305,8 +303,8 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
         BufferPool pool = new(bufferSize: 256, descriptorCapacity: 6, capacity: parallelism + 2);
         await using ChunkReader reader = new(input, pool, maxLineLength: 128);
 
-        string directory = Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
-        using TemporaryRunSet runs = new(directory);
+        using TempDirectory directory = new();
+        using TemporaryRunSet runs = new(directory.Path);
         ChunkSpiller spiller = new(runs, spillBufferSize: 4096);
 
         RunGenerationStrategy run = Resolve(strategy);
@@ -319,7 +317,6 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
             contents.Add(await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
         }
 
-        Directory.Delete(directory, recursive: true);
         contents.Sort(StringComparer.Ordinal);
         return contents;
     }

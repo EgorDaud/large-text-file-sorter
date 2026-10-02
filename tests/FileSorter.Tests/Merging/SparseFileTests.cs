@@ -1,4 +1,5 @@
 using FileSorter.Merging;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Merging;
@@ -10,21 +11,9 @@ namespace FileSorter.Tests.Merging;
 /// </summary>
 public sealed class SparseFileTests : IDisposable
 {
-    private readonly string _directory =
-        Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
+    private readonly TempDirectory _directory = new();
 
-    public SparseFileTests()
-    {
-        Directory.CreateDirectory(_directory);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_directory))
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-    }
+    public void Dispose() => _directory.Dispose();
 
     [Fact]
     [Trait("Case", "SF-01")]
@@ -32,7 +21,7 @@ public sealed class SparseFileTests : IDisposable
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "FSCTL_SET_SPARSE is a Windows-only, NTFS-only mechanism.");
 
-        string path = Path.Combine(_directory, "fresh.bin");
+        string path = Path.Combine(_directory.Path, "fresh.bin");
         using (FileStream stream = new(path, FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite))
         {
             Assert.SkipUnless(SparseFile.TryMarkSparse(stream.SafeFileHandle), "this volume does not support sparse files.");
@@ -52,7 +41,7 @@ public sealed class SparseFileTests : IDisposable
         byte[] payload = new byte[1024];
         Array.Fill(payload, (byte)0xAB);
 
-        string path = Path.Combine(_directory, "sparse.bin");
+        string path = Path.Combine(_directory.Path, "sparse.bin");
         using (FileStream stream = new(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.ReadWrite))
         {
             Assert.SkipUnless(SparseFile.TryMarkSparse(stream.SafeFileHandle), "this volume does not support sparse files.");
@@ -101,7 +90,7 @@ public sealed class SparseFileTests : IDisposable
         byte[] block = new byte[64 * 1024];
         Array.Fill(block, (byte)0xCD);
 
-        string path = Path.Combine(_directory, "cleared.bin");
+        string path = Path.Combine(_directory.Path, "cleared.bin");
         using (FileStream stream = new(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.ReadWrite))
         {
             Assert.SkipUnless(SparseFile.TryMarkSparse(stream.SafeFileHandle), "this volume does not support sparse files.");

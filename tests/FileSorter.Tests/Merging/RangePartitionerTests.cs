@@ -3,6 +3,7 @@ using CsCheck;
 using FileSorter.LineFormat;
 using FileSorter.Merging;
 using FileSorter.Tests.Properties;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Merging;
@@ -33,18 +34,9 @@ public sealed class RangePartitionerTests : IDisposable
     // than the default.
     private const int Parallelism = 4;
 
-    private readonly string _directory =
-        Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
+    private readonly TempDirectory _directory = new();
 
-    public RangePartitionerTests() => Directory.CreateDirectory(_directory);
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_directory))
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-    }
+    public void Dispose() => _directory.Dispose();
 
     [Fact]
     [Trait("Case", "RP-01")]
@@ -347,7 +339,7 @@ public sealed class RangePartitionerTests : IDisposable
     private IReadOnlyList<string> Write(IReadOnlyList<byte[]> runs)
     {
         List<string> paths = [];
-        string caseDirectory = Path.Combine(_directory, Guid.NewGuid().ToString("N"));
+        string caseDirectory = Path.Combine(_directory.Path, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(caseDirectory);
         for (int r = 0; r < runs.Count; r++)
         {

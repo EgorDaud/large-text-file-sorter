@@ -2,6 +2,7 @@ using System.Globalization;
 using CsCheck;
 using FileSorter.Merging;
 using FileSorter.Startup;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Properties;
@@ -43,16 +44,9 @@ public sealed class PartitionedMergePropertyTests : IDisposable
     // pass over one group, which is the only shape the partition applies to.
     private const int MergeFanIn = 128;
 
-    private readonly string _directory =
-        Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
+    private readonly TempDirectory _directory = new();
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_directory))
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-    }
+    public void Dispose() => _directory.Dispose();
 
     // A deliberately tiny vocabulary: drawing numbers and string parts freely essentially
     // never produces the case this property is about, a splitter key that many lines are
@@ -82,7 +76,7 @@ public sealed class PartitionedMergePropertyTests : IDisposable
             (List<(long Number, string StringPart)> entries, int runCount, int workerCount, int[] bucket) = scenario;
             CancellationToken ct = TestContext.Current.CancellationToken;
             string caseDirectory = Path.Combine(
-                _directory, Interlocked.Increment(ref iteration).ToString(CultureInfo.InvariantCulture));
+                _directory.Path, Interlocked.Increment(ref iteration).ToString(CultureInfo.InvariantCulture));
 
             // Splitting the multiset by bucket index, rather than slicing one sorted
             // sequence, is what puts byte-identical lines in different runs; a slice of

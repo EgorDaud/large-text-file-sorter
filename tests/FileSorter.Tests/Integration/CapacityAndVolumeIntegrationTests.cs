@@ -1,5 +1,7 @@
 using FileSorter.Startup;
+using FileSorter.Tests.Support;
 using Xunit;
+using static FileSorter.Tests.Support.TestTimeouts;
 
 namespace FileSorter.Tests.Integration;
 
@@ -11,23 +13,9 @@ namespace FileSorter.Tests.Integration;
 [Collection("Program")]
 public sealed class CapacityAndVolumeIntegrationTests : IDisposable
 {
-    private static readonly TimeSpan BoundedWait = TimeSpan.FromSeconds(30);
+    private readonly TempDirectory _directory = new();
 
-    private readonly string _directory =
-        Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
-
-    public CapacityAndVolumeIntegrationTests()
-    {
-        Directory.CreateDirectory(_directory);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_directory))
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-    }
+    public void Dispose() => _directory.Dispose();
 
     [Fact]
     [Trait("Case", "IT-07")]
@@ -38,7 +26,7 @@ public sealed class CapacityAndVolumeIntegrationTests : IDisposable
         // suite feeds Evaluate a figure it reports Sufficient for. The trivially small
         // input size is deliberate: the probe is the subject, not how much free space
         // this machine happens to have.
-        string root = Path.GetPathRoot(Path.GetFullPath(_directory)) ?? _directory;
+        string root = Path.GetPathRoot(Path.GetFullPath(_directory.Path)) ?? _directory.Path;
         DriveInfo drive = new(root);
         long? freeBytes = drive.IsReady ? drive.AvailableFreeSpace : null;
 
@@ -57,13 +45,13 @@ public sealed class CapacityAndVolumeIntegrationTests : IDisposable
         // failure, which proves the fallback logic but not that File.Move genuinely
         // throws across two real volumes the way Program's tryMove closure assumes.
         // Without a second volume this case skips; it must never silently pass.
-        string? secondVolumeRoot = FindWritableSecondVolumeRoot(Path.GetPathRoot(Path.GetFullPath(_directory)));
+        string? secondVolumeRoot = FindWritableSecondVolumeRoot(Path.GetPathRoot(Path.GetFullPath(_directory.Path)));
         Assert.SkipUnless(
             secondVolumeRoot is not null,
             "No second writable fixed volume was found on this machine; the cross-volume placement path cannot be exercised for real here.");
 
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
 
         string outputDirectory = Path.Combine(secondVolumeRoot!, "FileSorterTests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(outputDirectory);

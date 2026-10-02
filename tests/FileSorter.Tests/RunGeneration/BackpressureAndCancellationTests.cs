@@ -3,6 +3,7 @@ using System.Text;
 using FileSorter.LineFormat;
 using FileSorter.RunGeneration;
 using Xunit;
+using static FileSorter.Tests.Support.TestTimeouts;
 
 namespace FileSorter.Tests.RunGeneration;
 
@@ -17,8 +18,6 @@ namespace FileSorter.Tests.RunGeneration;
 /// </summary>
 public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture>
 {
-    private static readonly TimeSpan BoundedWait = TimeSpan.FromSeconds(15);
-
     // An upper bound on how long a prompt cancellation may take on a saturated thread
     // pool, not an expectation of how long one normally takes. It stays under
     // BoundedWait so a cancellation that never unwinds fails this assertion rather than
@@ -120,10 +119,15 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
         BufferPool pool = new(bufferSize: 128, descriptorCapacity: 2, capacity: parallelism + 2);
         await using ChunkReader reader = new(input, pool, maxLineLength: 32);
 
+        // Signalled from inside the first spill, so the cancel below provably lands while
+        // the run is underway rather than after a guessed delay.
+        TaskCompletionSource firstSpillStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         ChunkSpill spill = async (chunk, ct) =>
         {
             try
             {
+                firstSpillStarted.TrySetResult();
                 await Task.Delay(50, ct);
                 return string.Empty;
             }
@@ -137,9 +141,7 @@ public sealed class BackpressureAndCancellationTests : IClassFixture<AkkaFixture
         using CancellationTokenSource cts = new();
         Task<IReadOnlyList<string>> runTask = run(reader, spill, parallelism, cts.Token);
 
-        // Long enough for the run to be underway, past its first few chunks, and short
-        // enough to stay tiny next to the full drain above.
-        await Task.Delay(30, TestContext.Current.CancellationToken);
+        await firstSpillStarted.Task.WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
 
         Stopwatch clock = Stopwatch.StartNew();
         await cts.CancelAsync();

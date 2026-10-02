@@ -1,6 +1,8 @@
 using FileSorter.Startup;
 using FileSorter.Tests.Properties;
+using FileSorter.Tests.Support;
 using Xunit;
+using static FileSorter.Tests.Support.TestTimeouts;
 
 namespace FileSorter.Tests.Integration;
 
@@ -14,23 +16,9 @@ namespace FileSorter.Tests.Integration;
 [Collection("Program")]
 public sealed class LineFormatIntegrationTests : IDisposable
 {
-    private static readonly TimeSpan BoundedWait = TimeSpan.FromSeconds(30);
+    private readonly TempDirectory _directory = new();
 
-    private readonly string _directory =
-        Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
-
-    public LineFormatIntegrationTests()
-    {
-        Directory.CreateDirectory(_directory);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_directory))
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-    }
+    public void Dispose() => _directory.Dispose();
 
     [Fact]
     [Trait("Case", "IT-01")]
@@ -84,9 +72,9 @@ public sealed class LineFormatIntegrationTests : IDisposable
 
     private async Task AssertSortedMatchesOracleAsync(byte[] input)
     {
-        string inputPath = Path.Combine(_directory, "in.txt");
-        string outputPath = Path.Combine(_directory, "out.txt");
-        string tempDirectory = Path.Combine(_directory, "temp");
+        string inputPath = Path.Combine(_directory.Path, "in.txt");
+        string outputPath = Path.Combine(_directory.Path, "out.txt");
+        string tempDirectory = Path.Combine(_directory.Path, "temp");
         await File.WriteAllBytesAsync(inputPath, input, TestContext.Current.CancellationToken);
 
         SorterOptions options = new(inputPath, outputPath, tempDirectory, 2L << 20, 1024, 2, Pipeline.Channels);

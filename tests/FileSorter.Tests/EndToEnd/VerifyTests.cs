@@ -1,6 +1,8 @@
 using FileSorter.LineFormat;
+using FileSorter.Tests.Support;
 using FileSorter.Verification;
 using Xunit;
+using static FileSorter.Tests.Support.TestTimeouts;
 
 namespace FileSorter.Tests.EndToEnd;
 
@@ -9,23 +11,9 @@ namespace FileSorter.Tests.EndToEnd;
 [Collection("Program")]
 public sealed class VerifyTests : IDisposable
 {
-    private static readonly TimeSpan BoundedWait = TimeSpan.FromSeconds(30);
+    private readonly TempDirectory _directory = new();
 
-    private readonly string _directory =
-        Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
-
-    public VerifyTests()
-    {
-        Directory.CreateDirectory(_directory);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_directory))
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-    }
+    public void Dispose() => _directory.Dispose();
 
     [Fact]
     [Trait("Case", "VF-01")]
@@ -239,7 +227,7 @@ public sealed class VerifyTests : IDisposable
 
     private string WriteFile(string name, string content)
     {
-        string path = Path.Combine(_directory, name);
+        string path = Path.Combine(_directory.Path, name);
         File.WriteAllText(path, content);
         return path;
     }
