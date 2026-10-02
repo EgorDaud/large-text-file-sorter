@@ -70,7 +70,7 @@ public sealed class HighByteSortPropertyTests
     // span the whole Int64 range, negatives and both extremes included.
     private static readonly Gen<long> Number = Gen.OneOf(Gen.Long[-3, 3], Gen.Long);
 
-    // One draw in six pads the digits with up to two leading zeros after any sign: the
+    // One draw in nine (a roll of 1 or 2 out of 18) pads the digits with one or two leading zeros after any sign: the
     // same number, different raw bytes.
     private static readonly Gen<(int StringIndex, long Number, int ZeroPadding)> LineSpec =
         Gen.Select(Gen.Int[0, int.MaxValue], Number, Gen.Int[0, 17], (index, number, roll) =>

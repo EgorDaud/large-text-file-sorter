@@ -108,8 +108,10 @@ public class ChunkSortBenchmarks
     /// The baseline the radix has to beat: the same descriptors, the same buffer and the
     /// same LineOrder.Compare (cached prefix first, string bytes on a tie), through the
     /// BCL introsort alone with no bucketing pass in front of it. A struct comparer, as
-    /// in ChunkSorter, so the call is devirtualised in both rows and neither pays for an
-    /// interface dispatch the other avoids.
+    /// in ChunkSorter, through the same MemoryExtensions.Sort overload. That overload
+    /// boxes the struct and wraps it in a delegate, 88 B per call, which is the baseline's
+    /// whole 88 B allocation; both rows use the same mechanism, so neither pays for a
+    /// dispatch the other avoids.
     [Benchmark(Baseline = true)]
     public void PlainIntrosort() =>
         _workingDescriptors.AsSpan(0, _lineCount).Sort(new DescriptorComparer(_buffer));
