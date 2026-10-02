@@ -103,18 +103,17 @@ public sealed class CapacityAndVolumeIntegrationTests : IDisposable
 
         TextWriter originalError = Console.Error;
         StringWriter capturedError = new();
-        int? exitCode;
         Console.SetError(capturedError);
         try
         {
-            exitCode = CapacityProbe.CheckCapacity(inputSizeBytes: 1024, uncDirectory, uncDirectory);
+            // Unknown space warns and proceeds, so the check must not throw.
+            VolumeCapacity.Check(inputSizeBytes: 1024, uncDirectory, uncDirectory);
         }
         finally
         {
             Console.SetError(originalError);
         }
 
-        Assert.Null(exitCode);
         Assert.Contains("Could not determine free space", capturedError.ToString());
     }
 

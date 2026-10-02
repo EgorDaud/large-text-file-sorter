@@ -45,7 +45,9 @@ FileSorter/
     ConsoleRun.cs                 Ctrl+C and SIGTERM wiring, and the exception-to-exit-code ladder
                                   shared by sort and verify
     ExitCodes.cs                  the process exit code constants
-    CapacityProbe.cs              output-directory and --temp validation, the free-space probe
+    Preflight.cs                  output-directory and --temp validation
+    VolumeCapacity.cs             the free-space probe and the same-volume check
+    PreflightException.cs         a sort that cannot start: message and exit code
     SorterOptions.cs
   Planning/
     MemoryBudget.cs               MemoryPlan Calculate(...), and TryCalculate(...) for the CLI path
@@ -811,9 +813,9 @@ internal static class TempCapacity
 }
 ```
 
-A pure decision, separate from the free-space probe `CapacityProbe` performs once. The requirement is twice the input size: run files hold a full copy and a merge pass in progress holds part of another before its inputs are deleted. The multiplier is a deliberately conservative upper bound, and `MergeExecutor`'s per-group deletion is what keeps actual usage well inside it.
+A pure decision, separate from the free-space probe `VolumeCapacity` performs once. The requirement is twice the input size: run files hold a full copy and a merge pass in progress holds part of another before its inputs are deleted. The multiplier is a deliberately conservative upper bound, and `MergeExecutor`'s per-group deletion is what keeps actual usage well inside it.
 
-The nullable `freeBytes` is what makes SC-05 a unit test rather than a branch buried in `CapacityProbe`: a volume that does not report free space yields `Unknown`, and the rule is to proceed with a stated warning. Treating an unreported figure as zero would block every run on such volumes, which is a self-inflicted outage.
+The nullable `freeBytes` is what makes SC-05 a unit test rather than a branch buried in `VolumeCapacity`: a volume that does not report free space yields `Unknown`, and the rule is to proceed with a stated warning. Treating an unreported figure as zero would block every run on such volumes, which is a self-inflicted outage.
 
 ### 8.3 TemporaryRunSet
 

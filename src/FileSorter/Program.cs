@@ -1,4 +1,3 @@
-using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics;
 using Akka.Actor;
 using Akka.Configuration;
@@ -45,70 +44,34 @@ internal static class Program
         return ConsoleRun.Run(ct => RunAsync(options, ct));
     }
 
-    [SuppressMessage(
-        "Reliability", "CA2000:Dispose objects before losing scope",
-        Justification = "TryCreateTemporaryRunSet either hands back a run set that the `using` below " +
-        "takes ownership of, or returns false having set it to null. CA2000 does not follow ownership " +
-        "out of a Try-pattern out parameter.")]
     internal static async Task<int> RunAsync(SorterOptions options, CancellationToken ct)
     {
-        FileInfo inputInfo = new(options.InputPath);
-        if (!inputInfo.Exists)
-        {
-            Console.Error.WriteLine($"Input file not found: '{options.InputPath}'.");
-            return ExitCodes.InvalidArguments;
-        }
-
         try
         {
-            // Report inaccessible input before allocating the sort buffers.
-            using FileStream probe = File.OpenRead(options.InputPath);
+            return await SortAsync(options, ct);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (PreflightException ex)
         {
-            Console.Error.WriteLine($"Input file '{options.InputPath}' cannot be read: {ex.Message}");
-            return ExitCodes.InvalidArguments;
+            Console.Error.WriteLine(ex.Message);
+            return ex.ExitCode;
         }
+    }
 
-        // Keep the descriptor-size estimate within the configured line limit.
-        int assumedMeanLineLength = AssumedMeanFor(options);
-        if (!MemoryBudget.TryCalculate(
-                options.MemoryBudgetBytes, options.Parallelism, options.MaxLineLength, assumedMeanLineLength, out MemoryPlan plan))
-        {
-            // Report the minimum budget using CLI option names and units.
-            long minimum = MemoryBudget.MinimumViableBudget(
-                options.Parallelism, options.MaxLineLength, assumedMeanLineLength);
-
-            Console.Error.WriteLine(
-                $"A --memory budget of {ProgressReporter.Describe(options.MemoryBudgetBytes)} is too small. At --parallelism " +
-                $"{options.Parallelism} with --max-line {ProgressReporter.Describe(options.MaxLineLength)}, the sorter needs at " +
-                $"least {ProgressReporter.Describe(minimum)}.");
-            return ExitCodes.InvalidArguments;
-        }
+    private static async Task<int> SortAsync(SorterOptions options, CancellationToken ct)
+    {
+        FileInfo inputInfo = ValidateInput(options.InputPath);
+        MemoryPlan plan = PlanMemory(options);
 
         // Validate destinations before reading input or creating run files.
-        string outputDirectory = CapacityProbe.DirectoryOf(options.OutputPath);
-        if (!CapacityProbe.TryValidateOutputDirectory(outputDirectory, out string? outputDirectoryError))
-        {
-            Console.Error.WriteLine(outputDirectoryError);
-            return ExitCodes.InvalidArguments;
-        }
+        string outputDirectory = Preflight.DirectoryOf(options.OutputPath);
+        Preflight.ValidateOutputDirectory(outputDirectory);
 
         // Create the temp parent before probing its capacity. The private run directory
         // is created only when the first run is written.
-        if (!CapacityProbe.TryCreateTemporaryRunSet(options.TempDirectory, out TemporaryRunSet? runsOrNull, out string? tempDirectoryError))
-        {
-            Console.Error.WriteLine(tempDirectoryError);
-            return ExitCodes.InvalidArguments;
-        }
-
-        using TemporaryRunSet runs = runsOrNull;
+        using TemporaryRunSet runs = Preflight.CreateTemporaryRunSet(options.TempDirectory);
 
         // The final output can occupy a different volume from the temporary runs.
-        if (CapacityProbe.CheckCapacity(inputInfo.Length, options.TempDirectory, outputDirectory) is int capacityExitCode)
-        {
-            return capacityExitCode;
-        }
+        VolumeCapacity.Check(inputInfo.Length, options.TempDirectory, outputDirectory);
 
         Stopwatch clock = Stopwatch.StartNew();
 
@@ -201,6 +164,46 @@ internal static class Program
 
             throw;
         }
+    }
+
+    private static FileInfo ValidateInput(string inputPath)
+    {
+        FileInfo inputInfo = new(inputPath);
+        if (!inputInfo.Exists)
+        {
+            throw new PreflightException($"Input file not found: '{inputPath}'.", ExitCodes.InvalidArguments);
+        }
+
+        try
+        {
+            // Report inaccessible input before allocating the sort buffers.
+            using FileStream probe = File.OpenRead(inputPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new PreflightException($"Input file '{inputPath}' cannot be read: {ex.Message}", ExitCodes.InvalidArguments);
+        }
+
+        return inputInfo;
+    }
+
+    private static MemoryPlan PlanMemory(SorterOptions options)
+    {
+        // Keep the descriptor-size estimate within the configured line limit.
+        int assumedMeanLineLength = AssumedMeanFor(options);
+        if (MemoryBudget.TryCalculate(
+                options.MemoryBudgetBytes, options.Parallelism, options.MaxLineLength, assumedMeanLineLength, out MemoryPlan plan))
+        {
+            return plan;
+        }
+
+        // Report the minimum budget using CLI option names and units.
+        long minimum = MemoryBudget.MinimumViableBudget(options.Parallelism, options.MaxLineLength, assumedMeanLineLength);
+        throw new PreflightException(
+            $"A --memory budget of {ProgressReporter.Describe(options.MemoryBudgetBytes)} is too small. At --parallelism " +
+            $"{options.Parallelism} with --max-line {ProgressReporter.Describe(options.MaxLineLength)}, the sorter needs at " +
+            $"least {ProgressReporter.Describe(minimum)}.",
+            ExitCodes.InvalidArguments);
     }
 
     // Keep budget calculation and minimum-budget diagnostics on the same estimate.

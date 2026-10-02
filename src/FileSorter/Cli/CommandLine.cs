@@ -181,7 +181,7 @@ internal static class CommandLine
 
         if (string.IsNullOrEmpty(tempDirectory))
         {
-            tempDirectory = CapacityProbe.DirectoryOf(outputPath);
+            tempDirectory = Preflight.DirectoryOf(outputPath);
         }
 
         options = new SorterOptions(inputPath, outputPath, tempDirectory, memoryBudgetBytes, maxLineLength, parallelism, pipeline);
