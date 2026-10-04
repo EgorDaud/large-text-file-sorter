@@ -3,12 +3,6 @@ using Xunit;
 
 namespace FileSorter.Tests.Properties;
 
-/// <summary>
-/// Deterministic cases for <see cref="NaiveReferenceSort"/>'s own end-of-file handling,
-/// pinned directly against the oracle rather than through a generated property: each
-/// case below is one specific structural shape the documented input rule names, not a
-/// random one.
-/// </summary>
 public sealed class NaiveReferenceSortTests
 {
     [Fact]
@@ -37,8 +31,6 @@ public sealed class NaiveReferenceSortTests
     [Trait("Case", "PB-17")]
     public void Sorting_a_lone_carriage_return_tail_after_the_last_terminated_line_leaves_no_extra_line()
     {
-        // The last '\n' ends "2. Banana"; the single '\r' after it has nothing behind it
-        // and nothing of its own, so it is an empty tail, not a one-byte third line.
         byte[] input = "1. Apple\n2. Banana\n\r"u8.ToArray();
 
         byte[] actual = NaiveReferenceSort.Sort(input);
@@ -61,12 +53,6 @@ public sealed class NaiveReferenceSortTests
     [Trait("Case", "PB-19")]
     public void Sorting_a_single_bare_carriage_return_produces_empty_output()
     {
-        // LineEntryGen never draws this shape on its own -- Render only applies the
-        // final termination when there is at least one entry, so a zero-entry file
-        // never picks up a trailing '\r'. Pinned here instead: the same tail rule
-        // PB-17 checks with content ahead of it applies with nothing ahead of it
-        // either -- the lone '\r' is the first half of a terminator whose '\n' never
-        // arrived, and a tail of nothing else is an empty tail, not a one-byte line.
         byte[] input = "\r"u8.ToArray();
 
         byte[] actual = NaiveReferenceSort.Sort(input);

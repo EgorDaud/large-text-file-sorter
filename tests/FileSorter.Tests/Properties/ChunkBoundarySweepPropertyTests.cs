@@ -6,22 +6,11 @@ using Xunit;
 
 namespace FileSorter.Tests.Properties;
 
-/// <summary>
-/// Sweeps the byte-boundary dimension against the real <c>ChunkReader</c>: random line
-/// lengths (some at exactly the limit), mixed <c>\n</c>/<c>\r\n</c>, an occasional BOM,
-/// an occasional bare trailing carriage return, random <c>bufferSize</c>,
-/// <c>descriptorCapacity</c> and pool capacity, and a stream that hands back only a few
-/// random bytes per read. The comparison is against an independent, non-streaming oracle
-/// (<see cref="NaiveLineFormat"/>) rather than against the input bytes, and includes
-/// injected over-length lines.
-/// </summary>
 public sealed class ChunkBoundarySweepPropertyTests
 {
     private const int MaxLineLength = RandomLineFileGen.MaxLineLength;
 
-    // The smallest bufferSize is MaxLineLength + 3, ChunkReader's floor, so every line
-    // fits one window and a chunk boundary is always forced by BufferSize or
-    // DescriptorCapacity running out, never by a line being unreadable.
+    // MaxLineLength + 3 is ChunkReader's smallest accepted buffer.
     private static readonly Gen<int> BufferSize = Gen.Int[MaxLineLength + 3, MaxLineLength + 3 + 2048];
     private static readonly Gen<int> DescriptorCapacity = Gen.Int[1, 7];
     private static readonly Gen<int> PoolCapacity = Gen.Int[2, 4];
@@ -41,13 +30,6 @@ public sealed class ChunkBoundarySweepPropertyTests
         int ReadCap,
         int StreamSeed);
 
-    // Two independent halves zipped at the end rather than chained through SelectMany:
-    // no generator's range depends on an earlier value, since malformedIndex needs only
-    // lines.Count and streamSeed, both in hand by the combining step.
-    //
-    // Roughly a quarter of iterations inject a malformed line: often enough to be
-    // exercised on every run at the iteration count below, rarely enough that most
-    // iterations still cover the well-formed reassembly-and-count comparison.
     private static readonly Gen<(bool HasBom, List<RandomLineFileGen.LineSpec> Lines, int InjectRoll, bool MalformedAtEnd, int MalformedLength)> FileShape =
         Gen.Select(Gen.Bool, RandomLineFileGen.LineList(RandomLineFileGen.SweepMaxLineCount), Gen.Int[0, 3], Gen.Bool, MalformedLength,
             (hasBom, lines, injectRoll, malformedAtEnd, malformedLength) => (hasBom, lines, injectRoll, malformedAtEnd, malformedLength));

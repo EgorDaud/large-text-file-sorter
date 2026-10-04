@@ -3,24 +3,11 @@ using System.Text;
 
 namespace FileSorter.Tests.Support;
 
-/// <summary>
-/// The byte-identity oracle. It deliberately shares no code with the production
-/// comparator -- it references <c>FileSorter.LineFormat</c> nowhere -- because a defect
-/// shared between the two would produce identical wrong output on both sides and the
-/// property would pass while proving nothing. Every rule below is re-derived from the
-/// behavioural contract rather than copied from a production type.
-/// </summary>
+// Deliberately shares no code with FileSorter.LineFormat, so a comparator defect cannot pass on both sides.
 internal static class NaiveReferenceSort
 {
-    /// The same three-level order as <see cref="Compare"/>, over whole lines given as
-    /// ASCII strings rather than as offsets into one buffer, for tests that build their
-    /// fixtures out of lines and have to decide whether one slice is entirely below
-    /// another without asking the production comparator.
     public static readonly IComparer<string> LineComparer = Comparer<string>.Create(CompareLines);
 
-    // Splits the input into lines, parses each line's key, sorts by the three-level
-    // order, and writes every line back out with a single '\n', including the last.
-    // Small inputs only: the whole file and every line's key are held in memory.
     public static byte[] Sort(byte[] input)
     {
         List<(int Offset, int Length)> lines = SplitLines(input);
@@ -44,22 +31,6 @@ internal static class NaiveReferenceSort
         return output.ToArray();
     }
 
-    // A leading byte order mark is consumed once, at offset zero, and is never part of
-    // a line. The empty region after the file's final terminator is not a line. Exactly
-    // one carriage return immediately before a line feed is stripped; any other
-    // carriage return is ordinary content. A bare carriage return at the very end of the
-    // file, with no line feed after it, is the first half of a terminator whose line
-    // feed never arrived, and is stripped the same way; a trailing region that is only
-    // that one byte is an empty tail, not a one-byte line.
-    //
-    // Delegates the actual splitting to NaiveLineFormat, the splitter oracle the
-    // buffer-boundary sweeps already check LineCursor against: writing this file's own
-    // second, slightly different reading of the same end-of-file rule risks the two
-    // oracles drifting apart from each other rather than from production. This call
-    // still shares no code with LineCursor itself. This oracle takes whole in-memory
-    // inputs with no line-length ceiling of its own, so it passes int.MaxValue and
-    // never sees NaiveLineFormat's malformed result -- that path belongs to the callers
-    // that pass a real limit (the buffer-boundary sweeps).
     private static List<(int Offset, int Length)> SplitLines(byte[] input)
     {
         NaiveLineFormat.NaiveSplitResult result =
@@ -68,8 +39,6 @@ internal static class NaiveReferenceSort
         return [.. result.Lines.Select(line => ((int)line.Offset, line.Length))];
     }
 
-    // The boundary is the first '.' in the line; one space immediately after it is
-    // consumed if present, and the string part is everything following, verbatim.
     private static (long Number, int StringOffset, int StringLength) ParseIndependently(
         byte[] buffer, int offset, int length)
     {
@@ -87,8 +56,6 @@ internal static class NaiveReferenceSort
         return (number, offset + stringStart, length - stringStart);
     }
 
-    // String part ascending, ordinal over raw bytes; then number ascending; then the
-    // raw line bytes ascending as the final deterministic tie-break.
     private static int Compare(byte[] buffer, Entry a, Entry b)
     {
         int stringComparison = buffer.AsSpan(a.StringOffset, a.StringLength)

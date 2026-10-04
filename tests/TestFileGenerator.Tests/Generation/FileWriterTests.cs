@@ -3,11 +3,6 @@ using Xunit;
 
 namespace TestFileGenerator.Tests.Generation;
 
-/// <summary>
-/// The sizing rules live with <see cref="LineComposer"/> and are asserted there. What is
-/// left for the writer is that it drives the composer to a stop and answers honestly for
-/// what it put on the stream.
-/// </summary>
 public sealed class FileWriterTests
 {
     private const long TargetBytes = 1024 * 1024;

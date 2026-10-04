@@ -1,12 +1,12 @@
 # Measured Results
 
-Every number the README's "Results" section refers to, measured on one machine, each figure saying how many samples stand behind it.
+Every number the README's "Results" section refers to, with the sample count behind each.
 
 **Machine.** AMD Ryzen 7 7840HS, 8 physical / 16 logical cores. Windows 11. .NET 10.0.11. NVMe SSD. Release builds, one sort at a time, input, temporary files and output on the same volume.
 
-**Input.** `TestFileGenerator` at seed 42, average line length 37.64 bytes. The 20 GiB file holds 570,483,043 lines and hashes to `2e91107033e198d4`; the 100 GiB file is described in section 2. That hash holds only on this .NET version: the generator's `System.Random` sequence is not promised stable across major versions, so a different runtime may produce a different file for the same seed.
+**Input.** `TestFileGenerator` at seed 42, average line length 37.64 bytes. The 20 GiB file holds 570,483,043 lines and hashes to `2e91107033e198d4` (on this .NET version only: `System.Random`'s sequence is not stable across major versions). The 100 GiB file is described in section 2.
 
-**Benchmark input changed on 2026-10-02.** The in-process benchmarks and `-- --flatness` used to generate their input from a hand-rolled ten-word ASCII vocabulary. They now call `TestFileGenerator`'s own `LineComposer` (seeded, default 0.1 duplicate ratio), so their data has the shipped file's shape. Benchmark and flatness figures recorded before 2026-10-02 used the old vocabulary and are not directly comparable with figures taken after it; they are left as recorded.
+**Benchmark input changed on 2026-10-02.** The in-process benchmarks and `-- --flatness` now generate input with `TestFileGenerator`'s `LineComposer` (seeded, default 0.1 duplicate ratio) instead of a ten-word ASCII vocabulary. Earlier figures are not directly comparable with later ones.
 
 ---
 
@@ -21,13 +21,13 @@ Every number the README's "Results" section refers to, measured on one machine, 
 | Merge time, any size | Tracks the drive, not the code | An observation |
 | Micro-benchmark time at parallelism 4 | Does not reproduce at all | Nothing |
 
-The merge is the unreliable half because of the drive: eight workers share one write queue, so its time tracks how the volume happens to feel that minute. Phase one is CPU-bound enough to be worth comparing.
+Merge time tracks the drive because eight workers share one write queue; phase one is CPU-bound enough to compare.
 
 ---
 
 ## 1. The reference sort, at 20 GiB
 
-Ten consecutive sorts at `--memory 4GiB` on the `akka` pipeline (the default when measured; the default is now `channels`). Section 4 reads the same series, interleaved with ten `channels` sorts, as a pipeline comparison.
+Ten consecutive sorts at `--memory 4GiB` on the `akka` pipeline, the default at the time (now `channels`). Section 4 compares them with ten interleaved `channels` sorts.
 
 | | 20 GiB @ 4 GiB, ten runs |
 |---|---|
@@ -41,21 +41,21 @@ Ten consecutive sorts at `--memory 4GiB` on the `akka` pipeline (the default whe
 | Output bytes | 21,474,836,456 |
 | Temporary files left behind | 0 |
 
-**The output verifies**: 570,483,043 lines and hash `2e91107033e198d4` on both sides. The suite passed at the time of the measurement: 492 tests, none skipped, warnings as errors.
+The output verifies (same line count and hash on both sides); 492 tests passed at the time, none skipped, warnings as errors.
 
-**Twenty back-to-back sorts leave the drive no time to recover, and the totals show it.** The first run finished in 56.3 s with 27.8 s of summed output-wait; the rest sat between 67 and 75 s with three to four times that wait. Phase one, the CPU-bound half, moved far less: 30.6 s to 41.2 s.
+**The total's spread is the drive.** The first run took 56.3 s with 27.8 s of output-wait; back-to-back runs after it took 67–75 s with three to four times that wait.
 
-**Peak working set runs above `--memory`.** Sampled every 500 ms by a launching script during a 4 GiB and a 6 GiB sort, it peaked at 4,170.7 MiB and 6,756.3 MiB — 1.8% and 10.0% over budget. The budget bounds the program's own buffers, not the process; the residual is CLR, GC and Akka.Streams overhead.
+**Peak working set runs slightly above `--memory`**: 4,170.7 MiB at 4 GiB and 6,756.3 MiB at 6 GiB (1.8% and 10.0% over), sampled every 500 ms. The budget bounds the program's buffers, not CLR, GC and Akka.Streams overhead.
 
 ---
 
 ## 2. At 100 GiB
 
-The target size, on a 720 GB volume with the 300 GiB free that input, temporary files and output need together.
+On a 720 GB volume with the 300 GiB free that input, temporary files and output need together.
 
-**The input is a concatenation, and that matters.** 20 GiB + 60 GiB + 20 GiB: 107,374,182,353 bytes, 2,849,095,397 lines. Both sources come from seed 42, so the 60 GiB file's first 20 GiB is byte-identical to the 20 GiB one — checked, not assumed — and that block appears three times. The extra ties work the third comparison level harder and skew the bucketing pass: right file for a capacity test, wrong one for the comparator's average case.
+**The input is a concatenation**, 20 GiB + 60 GiB + 20 GiB: 107,374,182,353 bytes, 2,849,095,397 lines. Both sources use seed 42, so one 20 GiB block appears three times (checked byte-identical). The extra ties make it a capacity test, not the comparator's average case.
 
-Eight runs, in the order taken:
+Eight runs, in order:
 
 | Budget | Total | Phase one | Runs | Splitters | Workers | Output-wait, summed over 8 |
 |---|---|---|---|---|---|---|
@@ -68,13 +68,11 @@ Eight runs, in the order taken:
 | 6 GiB | 322.7 s | 159.5 s | 617 | 0.69 s | 146.9–161.5 s | 290.8 s |
 | 6 GiB | 387.9 s | 191.3 s | 617 | 1.13 s | 175.7–194.4 s | 456.5 s |
 
-Slice imbalance was 1.01x everywhere but the last run, which reported 1.00x. Every run took **one merge pass**, against a fan-in ceiling of 2,048, and left no temporary files. Two were verified: 2,849,095,397 lines and hash `beaa3e37467111a8` on both sides, in 268.1 s and 277.2 s. The matching hash is what says the outputs carry the same lines; there is no byte oracle at this size, since one costs a second full sort.
+Slice imbalance was 1.01x in all but the last run (1.00x). Every run took one merge pass against a fan-in ceiling of 2,048 and left no temporary files. Two were verified: 2,849,095,397 lines and hash `beaa3e37467111a8` on both sides, in 268.1 s and 277.2 s.
 
-**No budget effect is visible between 6 and 8 GiB.** Phase one averages 166.7 s over three runs at 8 GiB and 169.5 s over five at 6 GiB — 1.7% apart, with the larger budget nominally *ahead* but well inside a per-budget spread of 21.6 s and 35.3 s.
+**No budget effect is visible between 6 and 8 GiB.** Phase one averages 166.7 s over three runs at 8 GiB and 169.5 s over five at 6 GiB, 1.7% apart, inside per-budget spreads of 21.6 s and 35.3 s. Totals are dominated by output-wait: the 448.2 s and 304.7 s runs do identical merge work.
 
-**The totals say even less, because output-wait dominates them.** It ranges from 279.5 s to 1325.0 s with nothing in the merge different: the 448.2 s run and the 304.7 s run share a budget, a run count and a merge pass, and differ only in how the drive felt.
-
-**The effect exists in the code; it is too small to see here.** `MemoryBudget.Calculate` makes `ChunkSize` linear in the budget with no ceiling, and `ChunkSorter.Sort` sets phase one's rate. `ChunkSortBenchmarks` sweeps the chunk sort across chunk size, single-threaded:
+**The effect exists but is small.** `MemoryBudget.Calculate` makes `ChunkSize` linear in the budget with no ceiling. `ChunkSortBenchmarks`, single-threaded:
 
 | Chunk | Mean | ms per MiB | vs previous |
 |---|---|---|---|
@@ -86,42 +84,42 @@ Slice imbalance was 1.01x everywhere but the last run, which reported 1.00x. Eve
 | 221 MiB (an 8 GiB budget) | 3,963.8 ms | 17.94 | +3.4% |
 | 320 MiB | 6,285.9 ms | 19.64 | +9.5% |
 
-Cost per byte rises monotonically and never plateaus, but 166 to 221 MiB — exactly 6 to 8 GiB — is **3.4%** of the chunk sort. At its 84% share of spill-worker time that is under 3% of phase one: about 5 s against the 20 to 35 s spread the table above shows at a fixed budget. The steep part is lower down — 221 MiB against 64 MiB is 19.9% per byte.
+At its 84% share of spill-worker time, the 3.4% step from 6 to 8 GiB is under 3% of phase one, about 5 s against a 20 to 35 s spread at a fixed budget. The steep part is lower: 221 MiB costs 19.9% more per byte than 64 MiB.
 
-**Phase one is write-bound at this size, and that is why it spreads** — 152.6–191.3 s, proportionally the same spread as the 20 GiB series' 30.6–41.2 s. It writes the whole input back out as run files, and at 100 GiB none of that fits in the 23 GiB of RAM that absorbs much of it at 20 GiB.
+**Phase one is write-bound at this size**, hence its spread: the run files it writes no longer fit in the 23 GiB of RAM that absorbs much of them at 20 GiB.
 
 ---
 
 ## 3. Against GNU sort
 
-An external reference, on a 20 GiB file from the same generator and machine. Worth recording because the two programs can be made to produce the *same bytes*, not merely similar-looking output.
+A 20 GiB file from the same generator, on the same machine.
 
-**The orders coincide.** `LC_ALL=C sort -k2 -k1,1n` reproduces the three ordering levels exactly: `-k2` compares field two to end of line byte-ordinally; `-k1,1n` compares field one numerically, ignoring the trailing period and honouring leading zeros and signs; and GNU's last-resort whole-line comparison, applied unless `-s` is given, is the third. Outputs are byte-identical at 8 MiB, 1 GiB (SHA-256 agreeing) and 20 GiB.
+**The outputs are byte-identical.** `LC_ALL=C sort -k2 -k1,1n` reproduces all three ordering levels; the third is GNU's last-resort whole-line comparison, applied without `-s`. Outputs match at 8 MiB, 1 GiB (SHA-256) and 20 GiB.
 
-**The flags favour GNU, deliberately.** `-S 4G` matches `--memory 4GiB`; `--parallel=16` is the logical core count; `-T` puts GNU's temporaries on the volume holding input and output, the contention the sorter runs under. Compression is off on both sides. `LC_ALL=C` is required for the byte order and also strips locale collation, making GNU faster.
+**The flags favour GNU.** `-S 4G` matches `--memory 4GiB`, `--parallel=16` is the logical core count, `-T` puts temporaries on the shared volume, and compression is off on both sides. `LC_ALL=C` also skips locale collation.
 
 | | Sample 1 | Sample 2 |
 |---|---|---|
 | This sorter, `--memory 4GiB` | 54.2 s | 73.6 s |
 | GNU sort 8.32, `-S 4G --parallel=16 -k2 -k1,1n` | 374.4 s | 373.3 s |
 
-Run ABBA — sorter, GNU, GNU, sorter — on one drive with 320 GB free.
+Run ABBA (sorter, GNU, GNU, sorter) on one drive with 320 GB free.
 
-**The ratio is 5.1x to 6.9x**, and that width is entirely this sorter's own: GNU reproduces to 0.3%, while the sorter's two samples differ by 36% — the same output-wait swing section 1 shows across ten runs, with phase one and slice imbalance unmoved.
+**The ratio is 5.1x to 6.9x.** GNU reproduces to 0.3%; the sorter's samples differ by 36%, the output-wait swing of section 1.
 
-**The multi-key comparison is not the story.** `LC_ALL=C sort` with no key options — whole-line order, so a bound rather than a competitor — took 344.6 s, putting the two keys at under 8% of GNU's 374 s. The rest is external-sort machinery: GNU merges single-threaded through a 16-way tree where this sorter range-partitions 186 runs across eight workers in one pass.
+**The keys are not the cost.** Keyless `LC_ALL=C sort` took 344.6 s, so the two keys are under 8% of GNU's time. The rest is machinery: GNU merges single-threaded through a 16-way tree; this sorter range-partitions 186 runs across eight workers in one pass.
 
-**The largest caveat, and it is not small.** This is the coreutils 8.32 build shipped with Git for Windows, so every read and write crosses the `msys-2.0.dll` POSIX emulation layer — a real handicap, not attributable to GNU's algorithm. WSL would not settle it cheaply either, reaching NTFS through a bridge slower than msys. Read these rows as *against GNU sort on this platform*, not against GNU at its best; what they establish is that both programs were asked for the same answer and one produced it several times faster.
+**Caveat.** This is coreutils 8.32 from Git for Windows, so all I/O crosses the `msys-2.0.dll` POSIX layer, a handicap unrelated to GNU's algorithm (WSL's NTFS bridge is slower still). These rows compare against GNU sort *on this platform*.
 
 ---
 
 ## 4. Phase one: Akka against Channels
 
-Phase one is the only part that differs between `--pipeline akka` and `--pipeline channels`; phase two is the same code either way. Two instruments measure it: real 20 GiB sorts, and a micro-benchmark.
+Only phase one differs between `--pipeline akka` and `--pipeline channels`.
 
 ### 4.1 The real measurement: 20 GiB, ten runs each
 
-The twenty sorts of section 1, alternating in ABBA blocks (A B B A, five times), timed by the sorter's `phase one produced N run(s)` line. **All twenty produced exactly 186 runs**, so both pipelines did identical work.
+Section 1's sorts interleaved with ten `channels` sorts in ABBA blocks, timed by the sorter's `phase one produced N run(s)` line. All twenty produced 186 runs.
 
 | Block | Akka | Channels | Difference |
 |---|---|---|---|
@@ -132,15 +130,13 @@ The twenty sorts of section 1, alternating in ABBA blocks (A B B A, five times),
 | 5 | 37.15 s | 35.80 s | +1.35 s |
 | **All ten each** | **36.60 s** | **35.42 s** | **+1.18 s (3.3%)** |
 
-**Akka is slower by about 3%, and the result is stable** — it lost all five blocks. Paired over them: mean +1.18 s, standard deviation 0.61 s, t(4) = 4.34, 95% confidence interval [0.43, 1.93] s.
+**Akka is about 3% slower and lost all five blocks.** Paired: standard deviation 0.61 s, t(4) = 4.34, 95% confidence interval [0.43, 1.93] s. Unpaired, t = 1.08: the drive drifted upward through the series (first run 30.6 s, the rest 34–41 s), which the pairing cancels.
 
-**Pairing is what makes that visible.** The drive drifted upward through the series (first run 30.6 s, the rest between 34 and 41 s), and an unpaired comparison over the raw twenty gives t = 1.08, which says nothing. ABBA blocks put each pipeline at the same mean position within its block, cancelling the drift.
-
-**Total sort time does not show the difference**: 69.28 s against 68.56 s. The merge swamps it — summed output-wait had a standard deviation of 20.3 s for Akka and 8.0 s for Channels, against a phase-one difference of 1.18 s.
+Total sort time hides it (69.28 s against 68.56 s) under output-wait standard deviations of 20.3 s (Akka) and 8.0 s (Channels).
 
 ### 4.2 The micro-benchmark
 
-`--filter "*RunGenerationBenchmarks*"`: identical generated bytes, a real `ChunkSpiller` writing real run files, the same `MemoryPlan`, over an 8 MiB input at a 2 MiB budget. Two launches of five warmup and twenty measured iterations, the whole matrix run **five times**.
+`--filter "*RunGenerationBenchmarks*"`: an 8 MiB input at a 2 MiB budget through a real `ChunkSpiller`, two launches of five warmup and twenty measured iterations, the whole matrix run five times.
 
 | Method | Parallelism | Mean, across five runs | Allocated |
 |---|---|---|---|
@@ -149,15 +145,11 @@ The twenty sorts of section 1, alternating in ABBA blocks (A B B A, five times),
 | Channels | 4 | 26.6 – 48.7 ms | 4.52 MB |
 | Akka | 4 | 28.2 – 58.5 ms | 4.61 MB |
 
-**At parallelism 1 the ranges do not overlap:** Akka is slower in all five runs, by 9 to 21%.
-
-**At parallelism 4 the benchmark measures nothing.** Both pipelines swing across a range twice as wide as any difference between them, and neither ordering survives a repeat. Two samples of that row would read as a result; five say it is noise.
-
-**Allocation reproduces to the digit:** Akka allocates 2–3% more, every run, both parallelisms.
+At parallelism 1 Akka is slower in all five runs, by 9 to 21%. At parallelism 4 the ranges are twice as wide as any difference: noise. Akka allocates 2–3% more, every run.
 
 ### 4.3 Where the extra time goes
 
-`SpillWorkBenchmarks` measures the halves of a spill separately — sorting without writing, writing without sorting. Five runs, same shape.
+`SpillWorkBenchmarks` times sorting without writing and writing without sorting. Five runs, same shape.
 
 | Half | Parallelism | Channels | Akka |
 |---|---|---|---|
@@ -166,34 +158,28 @@ The twenty sorts of section 1, alternating in ABBA blocks (A B B A, five times),
 | Sort | 4 | 11.1 – 14.2 ms | 13.9 – 26.8 ms |
 | Write | 4 | 26.4 – 35.6 ms | 27.4 – 36.6 ms |
 
-**At parallelism 1 Akka loses both halves cleanly** — neither row's ranges overlap, consistent with 4.2 and with the 20 GiB series. **At parallelism 4 neither row separates**: the sort halves only touch at the edges (Akka's best 13.9 ms against Channels' worst 14.2 ms) and the write halves overlap outright.
-
-**This is what the `Task.Run` in `AkkaRunGeneration` exists for.** `SelectAsyncUnordered` invokes its mapper on the fused stage's own actor thread, and `ChunkSpiller.SpillAsync` runs synchronously up to its first incomplete await, which is *after* the sort. Without the offload every chunk would be sorted on the stream's single thread, one at a time. What it cannot remove is its own per-chunk hop — the obvious home for the residual.
+At parallelism 1 Akka loses both halves; at parallelism 4 neither separates. The likely residual is the per-chunk hop of the `Task.Run` in `AkkaRunGeneration`, which keeps sorts off the stream's single actor thread.
 
 ### 4.4 Scheduling is not where the cost is
 
-`SchedulerOverheadBenchmarks` runs the identical shape with a spill that only releases the pool slot — the disk taken out. Five runs.
+`SchedulerOverheadBenchmarks` runs the same shape with a spill that only releases the pool slot. Five runs.
 
 | Parallelism | Channels | Akka | Akka's allocation |
 |---|---|---|---|
 | 1 | 10.5 – 12.2 ms | 11.3 – 14.1 ms | 6.6 – 6.8x Channels' |
 | 4 | 13.9 – 14.5 ms | 12.8 – 21.0 ms | 4.8 – 5.0x Channels' |
 
-Against the same shape with a real spiller, the realistic run costs **five to seven times the no-op one at parallelism 1, two to four at parallelism 4** — a small multiple. Three things follow:
+The realistic run costs five to seven times this at parallelism 1 and two to four at parallelism 4, and this still includes reading and parsing, so it bounds scheduling from above. The pipeline gap is −0.3 ms to +2.6 ms at parallelism 1 (−1.1 ms to +7.0 ms at parallelism 4, from Akka's unstable rows). Akka's 14.28 KB against 94–96 KB at parallelism 1 shrinks to 2–3% once the 64 KiB spill buffers are added.
 
-- **The no-op figure bounds scheduling from above rather than measuring it**: it still reads and parses the whole 8 MiB through `ChunkReader`, work common to both pipelines.
-- **The scheduler's own share is the gap *between* them** — −0.3 ms to +2.6 ms at parallelism 1, where both are stable. At parallelism 4 it spans −1.1 ms to +7.0 ms, but that upper end is Akka's unstable rows, not a repeatable difference.
-- **Allocation is where Akka's machinery shows** — five to seven times Channels' with the disk removed, 14.28 KB against 94–96 KB at parallelism 1, which the budgeted 64 KiB spill buffers flatten to the realistic table's 2–3%.
+### 4.5 Conclusion
 
-### 4.5 The bottom line
-
-Akka costs about 3% of phase one at 20 GiB and 2–3% more allocation. It was the default when this was measured, and was not defended on speed: it rests on composition and failure semantics, which the README explains. The default has since moved to `channels` (design-spec D1, 2026-09-30); `--pipeline akka` remains the opt-in.
+Akka costs about 3% of phase one at 20 GiB and 2–3% more allocation. The default is `channels`; `--pipeline akka` is kept for composition and failure semantics (see the README), not speed.
 
 ---
 
 ## 5. The merge-worker dimension
 
-`MergeBenchmarks` drives `KWayMerge.MergeAsync` directly and has no merge-worker axis. `PartitionedMergeBenchmarks` covers it, driving `MergeExecutor.ExecuteAsync` — `RangePartitioner` included — over 250 run files from a 128 MiB input, with `MergeParallelism` forced to 1, 2, 4 and 8 on one plan built for 8 workers at 256 MiB.
+`PartitionedMergeBenchmarks` drives `MergeExecutor.ExecuteAsync`, `RangePartitioner` included, over 250 run files from a 128 MiB input, forcing `MergeParallelism` to 1, 2, 4 and 8 on one plan built for 8 workers at 256 MiB.
 
 | Merge workers | Mean | Allocated |
 |---|---|---|
@@ -202,22 +188,18 @@ Akka costs about 3% of phase one at 20 GiB and 2–3% more allocation. It was th
 | 4 | 705.9 ms | 29.97 MB |
 | 8 | 592.3 ms | 50.46 MB |
 
-**A 53.2% drop from one worker to eight**, tapering across the doublings (−17.8%, −32.1%, −16.1%) rather than scaling linearly — the same straggling and shared write queue the worker spreads in sections 1 and 2 show.
-
-**Allocation rises roughly with the worker count**, matching `MemoryPlan.WorstCasePhaseTwoBytes`'s linear-in-`MergeParallelism` shape: each worker opens its own cursors and output buffer.
-
-**The one-worker row is not comparable with `MergeBenchmarks.Disk`** (1,256.3 ms from disk, 660.1 ms from memory): it forces the eight-worker plan's much smaller per-worker window down to one worker rather than solving fresh for one worker at that budget.
+Eight workers are 53.2% faster than one, with diminishing steps (−17.8%, −32.1%, −16.1%) from straggling and the shared write queue. Allocation grows with worker count, as `MemoryPlan.WorstCasePhaseTwoBytes` predicts. The one-worker row keeps the eight-worker plan's smaller window, so it is not comparable with `MergeBenchmarks.Disk` (1,256.3 ms from disk, 660.1 ms from memory).
 
 ### Sparse against plain preallocation
 
-Measured 2026-09-30 on the seed-42 20 GiB file (NTFS on the same NVMe drive, input, runs and output on one volume): the shipped build against a scratch build whose `SparseFile.TryMarkSparse` returns `false`, so the partitioned output is preallocated plain and NTFS zero-fills ahead of the higher-offset workers. One discarded warm-up, then sparse, plain, plain, sparse, so a drift across the series cancels. Merge time is total minus phase one; output wait is summed across workers.
+Measured 2026-09-30 on the seed-42 20 GiB file: the shipped build against one whose `SparseFile.TryMarkSparse` returns `false`, so NTFS zero-fills ahead of the higher-offset workers. One discarded warm-up, then sparse, plain, plain, sparse. Merge time is total minus phase one; output wait is summed across workers.
 
 | Configuration | Merge workers | Merge, sparse | Merge, plain | Output wait, sparse | Output wait, plain |
 |---|---|---|---|---|---|
 | `--memory 1GiB` (default) | 2 | 70.8 s, 73.5 s | 70.9 s, 79.7 s | 10.8 s, 11.4 s | 21.2 s, 29.8 s |
 | `--memory 4GiB` | 8 | 34.0 s, 33.4 s | 53.5 s, 53.7 s | 84.4 s, 85.0 s | 215.4 s, 218.6 s |
 
-**Sparse preallocation is what lets the partitioned merge scale.** At eight workers the plain file makes the merge 59% slower and multiplies output wait by 2.6, because every worker but the first waits on zero-fill before its first byte lands; at two workers, where only one slice starts past offset 0, output wait still doubles while the merge moves 4%. Both outputs hash to the same `A3A86CFA…3E6F13`: the difference is time only. Kept, against the review's keep-if-≥5%-merge-or-≥10%-wait rule set before measuring.
+**Sparse preallocation is what lets the partitioned merge scale**: without it, eight workers merge 59% slower with 2.6x the output wait. Both outputs hash to `A3A86CFA…3E6F13`. It stays, against a bar set before measuring of ≥5% merge time or ≥10% output wait.
 
 ---
 
@@ -225,11 +207,11 @@ Measured 2026-09-30 on the seed-42 20 GiB file (NTFS on the same NVMe drive, inp
 
 Three instruments over real 110.7 MiB chunks of the 20 GiB file at the target budget, 3,194,299 descriptors each.
 
-**Where the first bucketing pass leaves the work.** 48 of 256 top-byte buckets are populated, which is what the generator's 97-word vocabulary allows; the largest holds 8.1% of the chunk, and the sixteen above 65,536 descriptors hold 60.5% between them. Hence the byte-by-byte descent: a second byte splits the biggest to at most 45.6% of its parent.
+**The first bucketing pass.** 48 of 256 top-byte buckets are populated (the generator's 97-word vocabulary); the largest holds 8.1% of the chunk, and the sixteen above 65,536 descriptors hold 60.5%. A second byte splits the biggest to at most 45.6% of its parent, hence the byte-by-byte descent.
 
-**What the remaining comparisons cost.** A counting comparer over the production sort shape reports 57,996,758 comparisons for 3,194,299 lines, 18.2 per line. **31.1% are decided by the cached prefix alone, in registers; 68.9% fall through into the string bytes**, examining 14.7 bytes each. The deep radix removes that fall-through, reading one byte per descriptor for a whole range instead.
+**The remaining comparisons.** 57,996,758 comparisons for 3,194,299 lines, 18.2 per line. 31.1% are decided by the cached prefix; 68.9% fall through to the string bytes, examining 14.7 bytes each, which the deep radix replaces with one byte read per descriptor per range.
 
-**What the depth cap costs on degenerate data.** Three million lines, median of five, against a single-level bucketing baseline; a positive number is *slower* than no deep radix at all:
+**The depth cap on degenerate data.** Three million lines, median of five, against single-level bucketing; positive means slower than no deep radix:
 
 | Shape | Baseline | Shipped (guarded, cap 16) |
 |---|---|---|
@@ -238,11 +220,11 @@ Three instruments over real 110.7 MiB chunks of the 20 GiB file at the target bu
 | Empty string part for every line | 829.1 ms | +1.0% |
 | Shared 30-byte head, four distinct tails | 1,304.3 ms | +2.0% |
 
-Every range the descent enters on such input is a block of byte-identical keys — exactly what the depth cap bounds. A cap of 32 is faster on real data but costs +20.0% on the 200-byte shape where 16 costs +6.2%, which is why 16 ships. Real chunks have 48 distinct first bytes, not one, which is also why these instruments avoid a synthetic vocabulary.
+A cap of 32 is faster on real data but costs +20.0% on the 200-byte shape, so 16 ships.
 
 ### The radix against a plain introsort
 
-Measured 2026-10-02 with `ChunkSortBenchmarks` (the full job: 2 launches, 5 warm-up and 20 measured iterations, about 17 minutes) on the generator's own input through `SyntheticInput`, seed 20260907, AMD Ryzen 7 7840HS, .NET 10.0.11, one descriptor-array copy per iteration. `PlainIntrosort` is the baseline: `Span<LineDescriptor>.Sort` with a struct comparer over the same `LineOrder.Compare` and cached prefix, no bucketing in front of it. `Sort` is the shipped `ChunkSorter.Sort`.
+`ChunkSortBenchmarks`, measured 2026-10-02 (2 launches, 5 warm-up and 20 measured iterations, about 17 minutes) on generator input through `SyntheticInput`, seed 20260907. `PlainIntrosort` is `Span<LineDescriptor>.Sort` with a struct comparer over the same `LineOrder.Compare` and cached prefix; `Sort` is the shipped `ChunkSorter.Sort`.
 
 | Chunk | Plain introsort (mean ± error) | `ChunkSorter.Sort` (mean ± error) | Ratio | Allocated, plain / radix |
 |---|---|---|---|---|
@@ -254,15 +236,15 @@ Measured 2026-10-02 with `ChunkSortBenchmarks` (the full job: 2 launches, 5 warm
 | **221 MiB** | 2,712.8 ± 85.6 ms | 1,342.9 ± 44.1 ms | **0.50** | 88 B / 57.3 MiB |
 | 320 MiB | 4,104.3 ± 201.7 ms | 2,597.0 ± 473.2 ms | 0.64 | 88 B / 79.5 MiB |
 
-**The radix is about twice as fast as a plain introsort with the cached-prefix comparer at the 110 and 221 MiB budgets (ratios 0.48 and 0.50, errors under 5% of the mean), well past the 10% bar, and that measurement justifies keeping it.** The ratio is 0.42–0.50 at every size with a tight error. The 166 MiB and 320 MiB rows, and the 64 MiB baseline, have wide errors from bimodal iterations on a laptop; a rerun of the 166 MiB row alone gave 2,956 ± 521 ms plain against 984 ± 69 ms radix (0.37), so that row is noise-limited, not a counter-example. The allocation column is the price: the diagnoser reports 4.6–79.5 MiB per radix sort against 88 B for the plain one (the source is the leaf sorts, not buffer use: `ChunkSorter` calls the span `Sort` with a struct comparer at its leaves, and that overload boxes the struct and wraps it in a delegate, 88 B per call, the same 88 B the plain baseline pays once. Counting leaf calls in a scratch copy gave 54,358 at 16 MiB and 136,086 at 32 MiB, and 54,358 × 88 B = 4.56 MiB and 136,086 × 88 B = 11.42 MiB, matching the 4.6 and 11.4 MiB reported and the allocated bytes measured directly. The baseline stays fair, because both rows use the same mechanism).
+**The radix is about twice as fast at the 110 and 221 MiB (4 and 8 GiB) chunk sizes**, errors under 5% of the mean, well past the 10% bar for keeping it. The wide-error rows come from bimodal iterations; a rerun of the 166 MiB row gave 2,956 ± 521 ms plain against 984 ± 69 ms radix (0.37).
+
+**The price is allocation.** Each leaf sort's span `Sort` call boxes the struct comparer into a delegate, 88 B per call; 54,358 leaf calls at 16 MiB and 136,086 at 32 MiB give 4.56 MiB and 11.42 MiB, matching the table.
 
 ---
 
 ## 7. The memory-flatness matrices
 
-`-- --flatness` sorts roughly 1, 10, and 100 MiB of generated input at one fixed 16 MiB budget, **each size in its own freshly launched process**. That isolation is load-bearing: in one process the *previous* size's allocation churn inflates the *next* size's reading, which looks exactly like a leak that scales with input and is not one.
-
-Peak is the running maximum of `GC.GetTotalMemory(false)`, sampled on a 5 ms background timer throughout each sort, not a single read afterwards. The figures below are the earlier Channels-only run; as of 2026-09-30 the matrix drives both `ChannelRunGeneration` and `AkkaRunGeneration`, one freshly launched process per (size, pipeline), so a regression in the non-default pipeline is also caught (both are bound by the same buffer pool).
+`-- --flatness` sorts roughly 1, 10 and 100 MiB at a fixed 16 MiB budget, each size and pipeline in a fresh process so one size's allocation churn cannot inflate the next. Peak is the running maximum of `GC.GetTotalMemory(false)`, sampled every 5 ms. The first table predates the per-pipeline split and is Channels only.
 
 | Input | Peak managed heap | Peak vs budget |
 |---|---|---|
@@ -270,9 +252,9 @@ Peak is the running maximum of `GC.GetTotalMemory(false)`, sampled on a 5 ms bac
 | 10 MiB | 17.51 MiB | +9.4% |
 | 100 MiB | 22.54 MiB | +40.9% |
 
-Spread, largest peak over smallest: 41.2%, against a stated tolerance of 60%.
+Spread, largest peak over smallest: 41.2%, against a tolerance of 60%.
 
-Rerun on 2026-09-30 with both pipelines (`-- --flatness`, 16 MiB budget, `MergeParallelism` 1; input, output and run files on the D: drive):
+Rerun on 2026-09-30 with both pipelines (`MergeParallelism` 1; files on the D: drive):
 
 | Input | Channels peak | Channels vs budget | Akka peak | Akka vs budget |
 |---|---|---|---|---|
@@ -280,13 +262,13 @@ Rerun on 2026-09-30 with both pipelines (`-- --flatness`, 16 MiB budget, `MergeP
 | 10 MiB | 17.69 MiB | +10.5% | 17.96 MiB | +12.2% |
 | 100 MiB | 22.76 MiB | +42.2% | 23.07 MiB | +44.2% |
 
-Spread: 40.8% for Channels and 39.4% for Akka, both within the 60% tolerance. The Akka worker includes `ActorSystem` startup in its sampled window.
+Spread: 40.8% for Channels, 39.4% for Akka (whose window includes `ActorSystem` startup).
 
-Rerun on 2026-10-02, the first on the generator's own input (see the note at the top): 48.3% for Channels and 43.7% for Akka, 100 MiB peaks of 24.55 and 24.35 MiB. Still within the 60% tolerance, but the figures are not directly comparable with the 2026-09-30 rerun above, which used the old ten-word vocabulary; the realistic input changes the allocation pattern, so the spreads differ.
+Rerun on 2026-10-02 on generator input: spreads of 48.3% and 43.7%, 100 MiB peaks of 24.55 and 24.35 MiB (Channels, Akka).
 
-**The climb is GC bookkeeping, not growth in the retained set.** The byte count immediately after `BufferPool` construction — the configured footprint the guarantee describes — is flat at roughly 15 MiB whatever the input size, checked directly. Generation budgets and segment counts grow with the *number* of collections a run triggers, which scales with chunk count at a fixed budget, not with what is retained.
+**The climb is GC bookkeeping, not retained growth.** Memory right after `BufferPool` construction is flat at roughly 15 MiB for any input; generation budgets grow with the number of collections, which scales with chunk count.
 
-**This matrix never exercises the partitioned merge.** At the harness's parallelism (4), `--max-line` (4,096) and assumed mean (32), `MemoryBudget.Calculate` needs roughly 50 MiB before `MergeParallelism` reaches 2, so every figure above is a `MergeParallelism` 1 figure. `-- --flatness-parallel-merge` reruns it at 64 MiB — the smallest round budget clearing that threshold — over the same sizes plus 1 GiB, with every worker confirming `MergeParallelism` 2.
+**This matrix never exercises the partitioned merge.** At parallelism 4, `--max-line` 4,096 and assumed mean 32, `MemoryBudget.Calculate` needs roughly 50 MiB before `MergeParallelism` reaches 2. `-- --flatness-parallel-merge` reruns at 64 MiB, adding 1 GiB, every worker confirming `MergeParallelism` 2 (Channels only; the command now runs both pipelines):
 
 | Input | Peak managed heap | Peak vs budget |
 |---|---|---|
@@ -295,4 +277,4 @@ Rerun on 2026-10-02, the first on the generator's own input (see the note at the
 | 100 MiB | 74.10 MiB | +15.8% |
 | 1 GiB | 82.26 MiB | +28.5% |
 
-A 28.6% spread against the same tolerance, tighter than the 16 MiB matrix's 41.2% — the partitioned path adds a small fixed amount of state on top of a larger floor, and its overshoot is the same GC residual. Both matrices are one recorded run, not a bound on every machine. Since 2026-09-30 `--flatness-parallel-merge` also runs each size under both pipelines, roughly doubling its runtime; the figures above predate that and cover Channels only.
+A 28.6% spread: the partitioned path adds a small fixed state on a larger floor. Each matrix is one recorded run.

@@ -2,7 +2,6 @@ namespace FileSorter.Tests.Support;
 
 internal static class TestTimeouts
 {
-    // An upper bound for a saturated thread pool, not an expectation of how long a case
-    // takes: it turns a hung run into a failure instead of a stalled suite.
+    // Sized for a saturated thread pool; it only turns a hang into a failure.
     public static readonly TimeSpan BoundedWait = TimeSpan.FromSeconds(30);
 }
