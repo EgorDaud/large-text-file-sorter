@@ -38,7 +38,7 @@ A lenient mode that diverts malformed lines is a named extension, not built.
 
 | Tier | Proves | Location | Cases |
 |---|---|---|---|
-| Unit (LP, OC, CM, CB, CS, KM, RP, RC, OS, SF, MP, BP, MB, SC, GN, GW) | Parsing, ordering, chunking, sorting, merging, placement, planning, pooling, budgeting, capacity, generation | Per-slice folders | 222 |
+| Unit (LP, OC, CM, CB, CS, KM, RP, RC, OS, SF, MP, BP, MB, SC, GN, GW, GC) | Parsing, ordering, chunking, sorting, merging, placement, planning, pooling, budgeting, capacity, generation | Per-slice folders | 225 |
 | Property (PB) | The composed pipeline matches an independent oracle on random inputs; structural invariants hold | `Properties/` | 24 |
 | Integration (IT) | Line-format shapes against real files; capacity probe on a real volume and a UNC path; cross-volume placement | `Integration/` | 9 |
 | End-to-end and verify (ET, VF) | Whole runs through `SortCommand.RunAsync` and `VerifyCommand.RunAsync` | `EndToEnd/` | 20, 14 |
@@ -407,6 +407,16 @@ A chunk is one byte buffer plus a descriptor array (offset, length, number, stri
 | GW-01 | Existing stale output | Replaced; no `*.partial` |
 | GW-02 | Output locked against the move | Throws; old bytes kept; no `*.partial` |
 | GW-03 | Cancelled from the first progress callback | `OperationCanceledException` (exit 130); old bytes kept; no `*.partial` |
+
+### Generator command (GC)
+
+`tests/TestFileGenerator.Tests/GenerateCommandTests.cs` drives `GenerateCommand.Run`, the generator's exit-code mapping. Signal handling can't be exercised in-process.
+
+| ID | Condition | Expected |
+|---|---|---|
+| GC-01 | Small successful run | Exit 0; `Wrote ... to <path>` on stderr; output exists |
+| GC-02 | Output in a missing directory | Exit 5; `Output file '<path>' could not be written: ...`; nothing created |
+| GC-03 | Token cancelled before the run | Exit 130; silent; nothing created |
 
 ---
 

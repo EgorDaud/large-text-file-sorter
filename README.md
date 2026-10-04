@@ -9,7 +9,7 @@ Two console programs on .NET 10. **`TestFileGenerator`** writes a `<Number>. <St
 2. Banana is yellow                     30432. Something something something
 ```
 
-**A 100 GiB sort at a 6 GiB budget takes 313.4 s**; GNU `sort` takes 374.4 s on a 20 GiB file this one sorts in 54.2 s. This snapshot has 575 passing tests and warning-free Release builds on Linux and Windows; the 20 and 100 GiB sorts and the GNU comparison were recorded on the 2026-09-09 build, with the `akka` pipeline.
+**A 100 GiB sort at a 6 GiB budget takes 313.4 s**; GNU `sort` takes 374.4 s on a 20 GiB file this one sorts in 54.2 s. This snapshot has 578 passing tests and warning-free Release builds on Linux and Windows; the 20 and 100 GiB sorts and the GNU comparison were recorded on the 2026-09-09 build, with the `akka` pipeline.
 
 **Reviewing this?** [Run it in four commands](#quick-start) · [Open the code](#where-things-are) · [Check the numbers](#results) · [What it doesn't do](#limits)
 
@@ -59,10 +59,10 @@ dotnet run -c Release --project src/FileSorter -- --verify data.txt sorted.txt
 | 2 | sorter | Insufficient space on the temp or output volume; required, available and the directory examined |
 | 3 | both | Invalid arguments, including an unreplaceable destination |
 | 4 | sorter | `--verify` found the output out of order, unterminated, or disagreeing with the input's line count or hash |
-| 5 | sorter | An I/O failure after startup validation passed, such as a full disk; one `I/O error:` line on stderr |
+| 5 | both | An I/O failure after startup validation passed, such as a full disk; the sorter prints one `I/O error:` line, the generator one line naming the output file |
 | 130 | both | Cancelled |
 
-The generator has no exit 5: a failed write exits 3 and leaves an existing destination untouched. The sorter exits 3 for an unwritable destination on empty or single-run input, 5 when a multi-run merge cannot open it.
+A failed generator write exits 5 and leaves an existing destination untouched. The sorter exits 3 for an unwritable destination on empty or single-run input, 5 when a multi-run merge cannot open it.
 
 The first Ctrl+C or SIGTERM cancels, cleans up and exits 130; a second Ctrl+C kills the process without cleanup. SIGHUP is not handled, so a run under `nohup` outlives the session. A kill during a multi-run merge can leave a partial destination file.
 
@@ -82,9 +82,9 @@ src/FileSorter/   Program.cs (dispatch)
                   RunGeneration/  chunk read, radix sort, spill, buffer pool, both pipelines
                   Merging/        loser tree, splitters, pass planner, partitioned merge, placement
                   Verification/   --verify's two scans
-src/TestFileGenerator/   Program.cs, CommandLine.cs, Generation/ (vocabulary, line
+src/TestFileGenerator/   Program.cs, CommandLine.cs, GenerateCommand.cs, Generation/ (vocabulary, line
                   composition, writing, staged output)
-src/Shared/       behaviour both programs must agree on: ConsoleCancellation (Ctrl+C and
+src/Shared/       behaviour both programs must agree on: ExitCodes, ConsoleCancellation (Ctrl+C and
                   SIGTERM), StagingFile (write-then-replace), ByteSize, Arguments
 tests/            follows the production folders, plus Integration/, EndToEnd/,
                   Properties/, Support/

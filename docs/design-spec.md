@@ -25,18 +25,18 @@ The test strategy needs five seams: the splitter apart from file I/O, the merge 
 ```
 src/FileSorter/                  exe  the sorter
 src/TestFileGenerator/           exe  the generator
-src/Shared/                      lib  ConsoleCancellation, StagingFile, ByteSize, Arguments
+src/Shared/                      lib  ExitCodes, ConsoleCancellation, StagingFile, ByteSize, Arguments
 tests/FileSorter.Tests/          mirrors the production folders, plus EndToEnd/, Integration/, Properties/, Support/
 tests/TestFileGenerator.Tests/
 benchmarks/FileSorter.Benchmarks/
 ```
 
-`Shared` holds only what both programs must do identically: the cancellation policy, the `.partial` staging path beside a destination and its best-effort delete, the `B`/`KiB`/`MiB`/`GiB` size syntax, and taking an option's value. The line grammar is deliberately not shared. GN-09 runs generated output through the sorter's parser, so the two cannot drift.
+`Shared` holds only what both programs must do identically: the exit codes, the cancellation policy, the `.partial` staging path beside a destination and its best-effort delete, the `B`/`KiB`/`MiB`/`GiB` size syntax, and taking an option's value. The line grammar is deliberately not shared. GN-09 runs generated output through the sorter's parser, so the two cannot drift.
 
 | `src/FileSorter/` | Contents |
 |---|---|
 | root | `Program`: dispatch only (`--help`; `--verify` → `VerifyCommand`; otherwise `SortCommand`) |
-| `Cli/` | `SortCommand`, `VerifyCommand`, `VerifyOptions`, `CommandLine` (parsing and usage text), `SorterOptions`, `Preflight` (input, output directory, `--temp`), `VolumeCapacity` (free-space probe, same-volume check), `PreflightException`, `ConsoleRun` (cancellation wiring and the exception-to-exit-code ladder for both modes), `ExitCodes` |
+| `Cli/` | `SortCommand`, `VerifyCommand`, `VerifyOptions`, `CommandLine` (parsing and usage text), `SorterOptions`, `Preflight` (input, output directory, `--temp`), `VolumeCapacity` (free-space probe, same-volume check), `PreflightException`, `ConsoleRun` (cancellation wiring and the exception-to-exit-code ladder for both modes) |
 | `Planning/` | `MemoryBudget`, `MemoryPlan`, `TempCapacity`, `CapacityDecision` |
 | `Infrastructure/` | `TemporaryRunSet`, `ProgressReporter`, `FileStreams` |
 | `LineFormat/` | `LineParser`, `LineCursor`, `LineOrder`, `LineDescriptor`, `RunHead`, `LineStager`, `MalformedLineException` |
@@ -44,7 +44,7 @@ benchmarks/FileSorter.Benchmarks/
 | `Merging/` | `MergePlanner`, `MergePass`, `MergeExecutor`, `KWayMerge`, `RunCursor`, `RunCursorBuffers`, `MergeProgress`, `MergeReporter`, `RunPlacement`, `OutputFile`, `DestinationReplaceFailedException`; partitioned path: `PartitionedMerge`, `RangePartitioner`, `RangePartition`, `SliceStream`, `RunSliceStream`, `OutputSliceStream`, `SparseFile` |
 | `Verification/` | `OutputVerifier`, `VerificationResult` |
 
-`src/TestFileGenerator/` contains `Program`, `CommandLine`, and `Generation/` (`GeneratorOptions`, `Vocabulary`, `LineComposer`, `FileWriter`, `StagedOutput`).
+`src/TestFileGenerator/` contains `Program`, `CommandLine`, `GenerateCommand`, and `Generation/` (`GeneratorOptions`, `Vocabulary`, `LineComposer`, `FileWriter`, `StagedOutput`).
 
 Dependencies run one way:
 
@@ -425,14 +425,14 @@ Runs hold one copy of the input while a merge pass writes part of another, and p
 
 ## 9. The generator
 
-`LineComposer` composes lines into a caller-supplied span, from a fixed `Vocabulary`. `FileWriter.Write` drives it into a `Stream`, so composition and sizing are tested against a `MemoryStream`. `StagedOutput.Write` writes to a `StagingFile` path and moves it into place only on success.
+`LineComposer` composes lines into a caller-supplied span, from a fixed `Vocabulary`. `FileWriter.Write` drives it into a `Stream`, so composition and sizing are tested against a `MemoryStream`. `StagedOutput.Write` writes to a `StagingFile` path and moves it into place only on success. `GenerateCommand` is the generator's `ConsoleRun`: it owns the clock, progress lines, cancellation and the exception-to-exit-code mapping, so `Program` only handles `--help`, parsing and dispatch.
 
 - **Sizing.** The output is whole, terminated lines up to the first line that does not fit (`TryComposeNext` returns `false`). It never overshoots and never truncates a line, because the sorter would reject a truncated line. It can therefore be up to one line short.
 - **No `--max-line` option.** Nothing the generator composes approaches 64 KiB.
 - **Reproducibility** holds only on the same .NET version, because `System.Random`'s seeded sequence can change between major versions. An owned random generator would invalidate the recorded baselines.
 - **Duplicates are guaranteed by construction.** The ratio is a proportion over the file, and a positive ratio also forces the first two lines to share a string part. Two candidate pairs are always drawn, so later output does not depend on the target, and the first that fits is written. A ratio of 0 disables both.
 - **Numbers have no leading zeros**, so generated data never reaches step 4 of the comparison. OC-13 and OC-17 are hand-written for that reason.
-- **Progress and cancellation (D15).** The generator exits 0, 3 for bad arguments or a failed write, or 130 when cancelled. The staging file is deleted on any failure.
+- **Progress and cancellation (D15).** The generator exits 0, 3 for bad arguments, 5 for a failed write (as the sorter does), or 130 when cancelled. The staging file is deleted on any failure.
 
 ---
 
@@ -459,7 +459,7 @@ Defaults: `--memory 1GiB`, `--max-line 64KiB`, `--parallelism` = processor count
 | 2 | sorter | Insufficient space on the temp or output volume, naming required, available, and the directory examined |
 | 3 | both | Invalid arguments; usage printed |
 | 4 | sorter | `--verify` found the output out of order, unterminated, or disagreeing with the input's count or hash |
-| 5 | sorter | An I/O failure after startup validation passed, such as a full disk; one `I/O error:` line on stderr |
+| 5 | both | An I/O failure after startup validation passed, such as a full disk; the sorter prints one `I/O error:` line, the generator one line naming the output file |
 | 130 | both | Cancelled by the operator or by SIGTERM |
 
 **Exit 3 covers what the operator can fix with a different argument:**
@@ -468,7 +468,7 @@ Defaults: `--memory 1GiB`, `--max-line 64KiB`, `--parallelism` = processor count
 - A missing or unreadable input, or a missing or unreadable `--verify` output.
 - A `--memory` budget that is too small, with the minimum named.
 
-Exit 5 covers failures no argument caused. Every preflight failure is a `PreflightException` carrying its own code, so `ConsoleRun` is the only exception-to-exit-code mapping.
+Exit 5 covers failures no argument caused. Every preflight failure is a `PreflightException` carrying its own code, so `ConsoleRun` is the sorter's only exception-to-exit-code mapping, and `GenerateCommand` the generator's.
 
 **Cancellation.** `Shared/ConsoleCancellation` gives both programs the same policy:
 

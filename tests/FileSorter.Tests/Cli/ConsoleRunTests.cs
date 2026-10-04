@@ -1,6 +1,7 @@
 using FileSorter.Cli;
 using FileSorter.LineFormat;
 using FileSorter.Tests.Support;
+using Shared;
 using Xunit;
 
 namespace FileSorter.Tests.Cli;

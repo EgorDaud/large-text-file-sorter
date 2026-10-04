@@ -1,4 +1,4 @@
-namespace FileSorter.Cli;
+namespace Shared;
 
 internal static class ExitCodes
 {

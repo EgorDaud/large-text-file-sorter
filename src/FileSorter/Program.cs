@@ -1,4 +1,5 @@
 using FileSorter.Cli;
+using Shared;
 
 namespace FileSorter;
 
