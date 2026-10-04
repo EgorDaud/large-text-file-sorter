@@ -1,23 +1,17 @@
 using System.Text;
 using Akka.Actor;
 using Akka.Streams;
+using FileSorter.Infrastructure;
 using FileSorter.LineFormat;
 using FileSorter.RunGeneration;
-using FileSorter.Startup;
+using FileSorter.Tests.Support;
 using Xunit;
+using static FileSorter.Tests.Support.TestTimeouts;
 
 namespace FileSorter.Tests.RunGeneration;
 
-// Every test here runs unchanged against both production strategies: the pool is the flow
-// control, the exception surfaced is the same unwrapped type, slots are released on the
-// success, failure, and cancellation paths, and run order is not defined. A behaviour that
-// holds for one scheduler and not the other is a defect, not a library quirk.
 public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
 {
-    // An upper bound for a saturated thread pool, not an expectation of how long a run
-    // takes: it turns a hung strategy into a failure instead of a stalled suite.
-    private static readonly TimeSpan BoundedWait = TimeSpan.FromSeconds(15);
-
     private readonly AkkaFixture _akka;
 
     public RunGenerationStrategyTests(AkkaFixture akka)
@@ -44,64 +38,54 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
 
     [Theory]
     [MemberData(nameof(StrategiesAtTwoParallelisms))]
-    public async Task Outstanding_never_exceeds_pool_capacity_when_the_reader_outpaces_its_spillers(
+    public async Task Exactly_parallelism_spills_run_at_once_when_the_reader_outpaces_its_spillers(
         Strategy strategy, int parallelism)
     {
-        // The pool is the flow control in both strategies, not the channel's own bound
-        // and not Akka's internal buffer. A ceiling asserted against either of those
-        // would pass even for a strategy with no flow control at all, so this asserts
-        // BufferPool.Outstanding directly against PoolCapacity = parallelism + 2: one
-        // slot per spiller, plus the chunk being read and the reader's prefetch.
-        int poolCapacity = parallelism + 2;
+        // The pool leaves one chunk beyond the spillers, so a strategy that ignores parallelism overshoots by one.
         using MemoryStream input = new(BuildLines(count: 300));
-        BufferPool pool = new(bufferSize: 128, descriptorCapacity: 5, capacity: poolCapacity);
+        BufferPool pool = new(bufferSize: 128, descriptorCapacity: 5, capacity: parallelism + 2);
         await using ChunkReader reader = new(input, pool, maxLineLength: 32);
 
-        // Slower than the reader by construction: the reader awaits nothing but memory
-        // copies and parsing, while every spill sits on a fixed delay, which is what
-        // lets chunks pile up against the pool ceiling for the sampler to observe.
+        TaskCompletionSource saturated = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int running = 0;
+        int peak = 0;
         ChunkSpill spill = async (chunk, ct) =>
         {
-            await Task.Delay(15, ct);
-            chunk.Buffer.Dispose();
-            return string.Empty;
-        };
-
-        int observedMax = 0;
-        using CancellationTokenSource sampling = new();
-        Task sampler = Task.Run(async () =>
-        {
+            int now = Interlocked.Increment(ref running);
+            InterlockedMax(ref peak, now);
             try
             {
-                while (true)
+                if (now == parallelism)
                 {
-                    InterlockedMax(ref observedMax, pool.Outstanding);
-                    await Task.Delay(1, sampling.Token);
+                    saturated.TrySetResult();
                 }
+
+                await release.Task.WaitAsync(ct);
+                return string.Empty;
             }
-            catch (OperationCanceledException)
+            finally
             {
+                Interlocked.Decrement(ref running);
+                chunk.Buffer.Dispose();
             }
-        }, TestContext.Current.CancellationToken);
+        };
 
         RunGenerationStrategy run = Resolve(strategy);
-        await run(reader, spill, parallelism, TestContext.Current.CancellationToken)
-            .WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
-        await sampling.CancelAsync();
-        await sampler;
+        Task<IReadOnlyList<string>> runTask = run(reader, spill, parallelism, TestContext.Current.CancellationToken);
 
-        Assert.True(observedMax <= poolCapacity, $"observed {observedMax} outstanding against a ceiling of {poolCapacity}");
-        Assert.True(observedMax > 1, "the scenario never put the pool under real pressure, so the ceiling assertion above proves nothing");
+        await saturated.Task.WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
+        await WaitForStableOutstandingAsync(pool, BoundedWait);
+        release.SetResult();
+        await runTask.WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
+
+        Assert.Equal(parallelism, peak);
     }
 
     [Theory]
     [MemberData(nameof(Strategies))]
     public async Task A_spill_that_throws_still_releases_the_chunk_it_was_given(Strategy strategy)
     {
-        // The release contract is on the delegate, not just on ChunkSpiller: whatever
-        // implements ChunkSpill releases the slot it received, on success or on throw.
-        // A single-chunk input keeps the count unambiguous — there is no second chunk
-        // the reader could have handed off ahead of this one.
         const int parallelism = 2;
         using MemoryStream input = new("1. Apple\n"u8.ToArray());
         BufferPool pool = new(bufferSize: 256, descriptorCapacity: 8, capacity: parallelism + 2);
@@ -131,16 +115,7 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
     [MemberData(nameof(Strategies))]
     public async Task Cancelling_mid_run_releases_the_spilled_chunk_and_the_readers_own_state(Strategy strategy)
     {
-        // A chunk the reader has handed off but that never reached spill is not
-        // returned on abort. How far a strategy lets the reader run ahead of the one
-        // chunk inside spill is its own internal buffering, so this waits for whatever
-        // steady state the strategy settles into rather than assuming the ceiling.
-        //
-        // Two releases are guaranteed on cancellation: spill's own finally, and the
-        // reader's slot -- it always holds one between calls, the next chunk's
-        // prefetch, which DisposeAsync releases, so every caller must `await using`
-        // the reader. Anything a strategy's scheduler buffered beyond that is
-        // timing-dependent, which is why only an upper bound is asserted.
+        // Only an upper bound: what a scheduler buffers beyond the spilled chunk and the prefetch is timing-dependent.
         const int parallelism = 1;
         using MemoryStream input = new(BuildLines(count: 50));
         BufferPool pool = new(bufferSize: 128, descriptorCapacity: 2, capacity: parallelism + 2);
@@ -169,9 +144,6 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
         await cts.CancelAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
 
-        // Spill's finally has released its chunk whether or not the reader's prefetch
-        // was folded into the same release: a cancelled prefetch acquire fails inside
-        // ReadNextAsync's catch, which releases the chunk it was mid-delivery of.
         Assert.True(
             pool.Outstanding <= steadyState - 1,
             $"expected at least the spilled chunk's slot to be released (steady state {steadyState}), but {pool.Outstanding} remained outstanding");
@@ -185,11 +157,6 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
     [Fact]
     public async Task Malformed_input_surfaces_the_same_bare_exception_type_from_both_strategies()
     {
-        // Parallel.ForEachAsync's fault route is an AggregateException that a plain
-        // await already unwraps to the original exception; Akka's materialized Task
-        // wraps its stage failure in an AggregateException that survives the await, so
-        // AkkaRunGeneration unwraps it at its boundary. The claim is not just that both
-        // strategies fail, but that they fail as the identical, unwrapped type.
         Exception akka = await CaptureMalformedInputFailureAsync(Strategy.Akka);
         Exception channels = await CaptureMalformedInputFailureAsync(Strategy.Channels);
 
@@ -200,9 +167,6 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
     [Fact]
     public async Task Cancellation_surfaces_the_same_exception_type_from_both_strategies()
     {
-        // An already-cancelled token makes the first call each strategy makes --
-        // ChunkReader.ReadNextAsync, shared code neither strategy owns -- the thing
-        // that fails, before either scheduler's machinery can diverge from the other's.
         Exception akka = await CaptureCancellationFailureAsync(Strategy.Akka);
         Exception channels = await CaptureCancellationFailureAsync(Strategy.Channels);
 
@@ -213,11 +177,6 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
     [Fact]
     public async Task Both_strategies_at_two_parallelism_settings_produce_the_same_run_contents()
     {
-        // Run order is not defined: the returned list may differ in order and in which
-        // chunk lands in which run file across schedulers. Chunk boundaries are fixed
-        // by bufferSize and descriptorCapacity alone, so the sorted multiset of run
-        // contents must be identical regardless of strategy or parallelism. No
-        // assertion here depends on the order of the returned list.
         byte[] data = BuildLines(count: 400);
 
         List<string> baseline = await RunAndCollectSortedContentsAsync(Strategy.Akka, parallelism: 2, data);
@@ -232,11 +191,6 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
         Strategy strategy)
     {
         const int parallelism = 2;
-        // A disk error partway through a large file, which the single-chunk test cannot
-        // reach because there the reader is finished before the spill runs. Here the
-        // reader is still going, and a strategy whose reader parks on a full channel
-        // nothing will drain again never returns at all: no exception, no exit code,
-        // just a stalled sorter.
         using MemoryStream input = new(BuildLines(count: 400));
         BufferPool pool = new(bufferSize: 128, descriptorCapacity: 2, capacity: parallelism + 2);
         await using ChunkReader reader = new(input, pool, maxLineLength: 32);
@@ -262,8 +216,6 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
 
         RunGenerationStrategy run = Resolve(strategy);
 
-        // The failure reported is the spill's own, not whatever the reader tripped over
-        // once the channel closed under it: that one is a consequence, not the cause.
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => run(reader, spill, parallelism, TestContext.Current.CancellationToken)
                 .WaitAsync(BoundedWait, TestContext.Current.CancellationToken));
@@ -305,8 +257,8 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
         BufferPool pool = new(bufferSize: 256, descriptorCapacity: 6, capacity: parallelism + 2);
         await using ChunkReader reader = new(input, pool, maxLineLength: 128);
 
-        string directory = Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
-        using TemporaryRunSet runs = new(directory);
+        using TempDirectory directory = new();
+        using TemporaryRunSet runs = new(directory.Path);
         ChunkSpiller spiller = new(runs, spillBufferSize: 4096);
 
         RunGenerationStrategy run = Resolve(strategy);
@@ -319,7 +271,6 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
             contents.Add(await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
         }
 
-        Directory.Delete(directory, recursive: true);
         contents.Sort(StringComparer.Ordinal);
         return contents;
     }
@@ -342,8 +293,7 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
 
     private RunGenerationStrategy Resolve(Strategy strategy) => strategy switch
     {
-        Strategy.Akka => (reader, spill, parallelism, ct) =>
-            AkkaRunGeneration.RunAsync(reader, spill, parallelism, _akka.Materializer, ct),
+        Strategy.Akka => AkkaRunGeneration.Strategy(_akka.Materializer),
         Strategy.Channels => ChannelRunGeneration.RunAsync,
         _ => throw new ArgumentOutOfRangeException(nameof(strategy)),
     };
@@ -365,10 +315,6 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
         while (Interlocked.CompareExchange(ref target, candidate, prior) != prior);
     }
 
-    // Polls Outstanding until it has not moved for twenty consecutive samples, then
-    // returns that value: how long a strategy takes to reach steady state, and what
-    // that steady state is, are both strategy-dependent, so neither a fixed delay nor
-    // a target value would work here.
     private static async Task<int> WaitForStableOutstandingAsync(BufferPool pool, TimeSpan timeout)
     {
         DateTime deadline = DateTime.UtcNow + timeout;
@@ -398,8 +344,6 @@ public sealed class RunGenerationStrategyTests : IClassFixture<AkkaFixture>
     }
 }
 
-// One ActorSystem shared across every test in the class: starting one is expensive and
-// nothing under test depends on system identity.
 public sealed class AkkaFixture : IAsyncLifetime
 {
     private ActorSystem? _system;
@@ -408,7 +352,7 @@ public sealed class AkkaFixture : IAsyncLifetime
 
     public ValueTask InitializeAsync()
     {
-        _system = ActorSystem.Create(nameof(AkkaFixture));
+        _system = AkkaRunGeneration.CreateQuietSystem(nameof(AkkaFixture));
         Materializer = _system.Materializer();
         return ValueTask.CompletedTask;
     }

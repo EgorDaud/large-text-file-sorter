@@ -1,11 +1,5 @@
 namespace FileSorter.Tests.Properties;
 
-/// <summary>
-/// Wraps a stream and returns at most a random handful of bytes on every
-/// <see cref="ReadAsync"/> call, so the fill loops in <c>ChunkReader</c> and
-/// <c>RunCursor</c> run several partial reads per requested fill instead of the single
-/// generous read a plain <see cref="MemoryStream"/> satisfies in one call.
-/// </summary>
 internal sealed class LimitedReadStream(Stream inner, int maxBytesPerRead, Random random) : Stream
 {
     public override bool CanRead  => true;
@@ -19,9 +13,7 @@ internal sealed class LimitedReadStream(Stream inner, int maxBytesPerRead, Rando
         set => throw new NotSupportedException();
     }
 
-    // ChunkReader and RunCursor call the Memory<byte> overload exclusively, so only this
-    // override needs to be meaningful; the synchronous members below exist to satisfy
-    // the abstract Stream contract.
+    // ChunkReader and RunCursor only call this overload.
     public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
         int cap = random.Next(1, maxBytesPerRead + 1);

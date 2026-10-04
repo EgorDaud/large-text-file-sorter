@@ -2,49 +2,19 @@ using System.Text;
 using CsCheck;
 using FileSorter.LineFormat;
 using FileSorter.Merging;
-using FileSorter.Tests.Properties;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Merging;
 
-/// <summary>
-/// The range partition itself, checked as a value rather than through the merge that
-/// consumes it. The properties are: every located offset is a line start, the offsets are
-/// monotone, the slice lengths sum to the run length, and the keys are ordered across
-/// workers.
-///
-/// That last one is checked in the form that does not need the splitter keys themselves --
-/// every line in an earlier slice is strictly less than every line in a later one, across
-/// all runs at once -- which is equivalent to comparing each run against the splitter and
-/// strictly stronger. Equivalent, because one splitter is used for every run: a line
-/// before a run's boundary is below the splitter and a line at or after any run's boundary
-/// is at or above it, so the two sets are ordered by the splitter that separates them.
-/// Stronger, because it also pins the tie rule -- a run of byte-identical lines lands
-/// wholly in the later worker -- since a copy of a tied line left on the earlier side
-/// would make the earlier side's maximum equal the later side's minimum, and this
-/// comparison would then not be strict.
-/// </summary>
 public sealed class RangePartitionerTests : IDisposable
 {
     private const int MaxLineLength = 64;
-
-    // An arbitrary, small value: these fixtures are tiny, so the searches' degree of
-    // parallelism makes no observable difference here beyond exercising a value other
-    // than the default.
     private const int Parallelism = 4;
 
-    private readonly string _directory =
-        Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
+    private readonly TempDirectory _directory = new();
 
-    public RangePartitionerTests() => Directory.CreateDirectory(_directory);
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_directory))
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-    }
+    public void Dispose() => _directory.Dispose();
 
     [Fact]
     [Trait("Case", "RP-01")]
@@ -74,11 +44,6 @@ public sealed class RangePartitionerTests : IDisposable
     [Trait("Case", "RP-03")]
     public void A_run_of_byte_identical_lines_lands_wholly_in_one_worker()
     {
-        // The adversarial shape: one key, so no splitter can separate anything. Every
-        // splitter is that same line, every "first line at or above the splitter" is
-        // offset zero, and the last worker takes the lot. The partition is still a
-        // partition and the merge over it is still correct, but the imbalance is
-        // unbounded, and the executor reports it rather than hiding it.
         byte[] identical = Lines(Enumerable.Repeat("7. same", 400));
         IReadOnlyList<string> paths = Write([identical, identical, identical]);
 
@@ -96,10 +61,6 @@ public sealed class RangePartitionerTests : IDisposable
     [Trait("Case", "RP-04")]
     public void More_workers_than_lines_still_yields_a_partition_that_covers_every_byte()
     {
-        // Eight workers over three lines: at most three slices can hold anything, and the
-        // rest are empty. Nothing downstream treats an empty slice specially -- it simply
-        // opens no handle for it (MergeExecutor.MergeSliceAsync) -- so the only thing to
-        // pin here is that the partition is still complete.
         List<byte[]> runs = [Lines(["1. a"]), Lines(["2. b"]), Lines(["3. c"])];
         IReadOnlyList<string> paths = Write(runs);
 
@@ -108,8 +69,6 @@ public sealed class RangePartitionerTests : IDisposable
         AssertWellFormed(partition, runs);
         AssertKeyOrdered(partition, runs);
 
-        // Eight workers with at most three lines between them leave at least five empty
-        // slices, asserted rather than left as a property of the fixture.
         Assert.True(
             partition.SliceBytes.Count(bytes => bytes == 0) >= 5,
             "Expected at least five of the eight workers to receive an empty slice.");
@@ -119,10 +78,6 @@ public sealed class RangePartitionerTests : IDisposable
     [Trait("Case", "RP-05")]
     public void Duplicate_splitters_produce_empty_slices_rather_than_overlapping_ones()
     {
-        // Two distinct keys and five workers, so at least three of the four splitters are
-        // byte-identical to another. A duplicate splitter has to give its worker an empty
-        // slice; the failure it guards against is two workers being handed the SAME range,
-        // which would duplicate every line in it and still leave a sorted output.
         List<byte[]> runs =
         [
             Lines(Enumerable.Repeat("1. aaa", 50).Concat(Enumerable.Repeat("2. bbb", 50))),
@@ -141,19 +96,13 @@ public sealed class RangePartitionerTests : IDisposable
     [Trait("Case", "RP-06")]
     public void A_malformed_run_line_surfaces_as_a_malformed_line_exception_not_an_aggregate()
     {
-        // The searches run on several threads at once, so without unwrapping,
-        // Parallel.For would hand Program an AggregateException where its own exit-code
-        // mapping expects the malformed-line exception itself.
         List<byte[]> runs = [Lines(["1. a", "not a line at all", "3. c"]), Lines(["2. b"])];
         IReadOnlyList<string> paths = Write(runs);
 
         MalformedLineException ex = Assert.Throws<MalformedLineException>(
             () => RangePartitioner.Locate(paths, workerCount: 3, MaxLineLength, Parallelism, TestContext.Current.CancellationToken));
 
-        // The exception has to carry the real run path and the real byte offset
-        // ("1. a\n" is 5 bytes), or it cannot tell an operator which run, or where in
-        // it, the malformed line was. The line number stays unavailable rather than a
-        // misleading 0: this class never counts lines, only byte offsets.
+        // "1. a\n" is 5 bytes.
         Assert.Contains(paths[0], ex.Message, StringComparison.Ordinal);
         Assert.Equal(5, ex.ByteOffset);
         Assert.Equal(MalformedLineException.LineNumberUnavailable, ex.LineNumber);
@@ -170,8 +119,6 @@ public sealed class RangePartitionerTests : IDisposable
         AssertWellFormed(partition, withEmpties);
         AssertKeyOrdered(partition, withEmpties);
 
-        // Nothing at all to partition: the caller merges sequentially instead, which is
-        // correct for any input.
         IReadOnlyList<string> allEmpty = Write([[], []]);
         Assert.Null(RangePartitioner.Locate(
             allEmpty, workerCount: 4, MaxLineLength, Parallelism, TestContext.Current.CancellationToken));
@@ -181,10 +128,6 @@ public sealed class RangePartitionerTests : IDisposable
     [Trait("Case", "RP-08")]
     public void Random_run_sets_at_random_worker_counts_are_always_well_formed_and_key_ordered()
     {
-        // The curated cases above pin shapes someone thought of. This sweeps the run
-        // count, the lines per run, how many distinct keys there are (which is what
-        // decides whether splitters collide) and the worker count together, since the
-        // interesting failures live in their combinations rather than in any one.
         Gen<(int RunCount, int LinesPerRun, int DistinctKeys, int WorkerCount, int Seed)> scenario =
             Gen.Select(Gen.Int[1, 6], Gen.Int[0, 120], Gen.Int[1, 200], Gen.Int[2, 8], Gen.Int);
 
@@ -197,8 +140,6 @@ public sealed class RangePartitionerTests : IDisposable
                 paths, draw.WorkerCount, MaxLineLength, Parallelism, TestContext.Current.CancellationToken);
             if (located is not { } partition)
             {
-                // Only reachable when every run is empty, in which case there is nothing
-                // for the claims below to be about.
                 Assert.All(runs, run => Assert.Empty(run));
                 return;
             }
@@ -206,6 +147,48 @@ public sealed class RangePartitionerTests : IDisposable
             AssertWellFormed(partition, runs);
             AssertKeyOrdered(partition, runs);
         }, iter: 200);
+    }
+
+    [Fact]
+    [Trait("Case", "RP-09")]
+    public void A_sample_cut_short_by_its_byte_budget_still_yields_the_same_well_formed_partition_every_time()
+    {
+        const int lineLength = 8 * 1024;
+        const int linesPerRun = 1100;
+        Random random = new(2024);
+        List<byte[]> runs = [];
+        for (int r = 0; r < 4; r++)
+        {
+            List<string> lines = [];
+            for (int i = 0; i < linesPerRun; i++)
+            {
+                string head = $"{random.Next(97)}. k{random.Next(1_000_000):D6}";
+                lines.Add(head.PadRight(lineLength - 1, 'x'));
+            }
+
+            lines.Sort(NaiveReferenceSort.LineComparer);
+            runs.Add(Lines(lines));
+        }
+
+        long totalBytes = runs.Sum(run => (long)run.Length);
+        Assert.True(totalBytes / RangePartitioner.TargetSampleLines >= lineLength, "draws must land on distinct lines");
+        Assert.True((long)RangePartitioner.TargetSampleLines * lineLength >= 2L * RangePartitioner.SampleLineByteBudget);
+        IReadOnlyList<string> paths = Write(runs);
+
+        RangePartition[] partitions = [.. Enumerable.Range(0, 3).Select(_ => RangePartitioner.Locate(
+            paths, workerCount: 4, maxLineLength: 2 * lineLength, parallelism: 8, TestContext.Current.CancellationToken)!)];
+
+        AssertWellFormed(partitions[0], runs);
+        AssertKeyOrdered(partitions[0], runs);
+        Assert.Equal(4, partitions[0].NonEmptySlices);
+        foreach (RangePartition other in partitions[1..])
+        {
+            Assert.Equal(partitions[0].SliceBytes, other.SliceBytes);
+            for (int r = 0; r < runs.Count; r++)
+            {
+                Assert.Equal(partitions[0].RunOffsets[r], other.RunOffsets[r]);
+            }
+        }
     }
 
     private static RangePartition Locate(IReadOnlyList<string> paths, int workerCount)
@@ -216,7 +199,6 @@ public sealed class RangePartitionerTests : IDisposable
         return partition;
     }
 
-    // Line starts, monotone offsets, complete cover, and the slice arithmetic.
     private static void AssertWellFormed(RangePartition partition, IReadOnlyList<byte[]> runs)
     {
         long total = 0;
@@ -265,7 +247,6 @@ public sealed class RangePartitionerTests : IDisposable
             }
         }
 
-        // Every line the partition placed is still there, exactly once.
         Assert.Equal(
             runs.Sum(run => LinesIn(run, 0, run.Length).Count),
             perWorker.Sum(lines => lines.Count));
@@ -321,9 +302,6 @@ public sealed class RangePartitionerTests : IDisposable
         return Encoding.ASCII.GetBytes(content.ToString());
     }
 
-    // `runCount` runs, each independently sorted, drawing from `distinctKeys` distinct
-    // lines -- a small key space is what makes byte-identical lines land in several runs
-    // and makes two splitters collide.
     private static List<byte[]> SortedRuns(int runCount, int linesPerRun, int distinctKeys, int seed = 12345)
     {
         Random random = new(seed);
@@ -347,7 +325,7 @@ public sealed class RangePartitionerTests : IDisposable
     private IReadOnlyList<string> Write(IReadOnlyList<byte[]> runs)
     {
         List<string> paths = [];
-        string caseDirectory = Path.Combine(_directory, Guid.NewGuid().ToString("N"));
+        string caseDirectory = Path.Combine(_directory.Path, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(caseDirectory);
         for (int r = 0; r < runs.Count; r++)
         {

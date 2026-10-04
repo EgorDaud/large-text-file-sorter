@@ -19,8 +19,6 @@ internal sealed class BufferPool
         _lines = new LineDescriptor[capacity][];
         _outstanding = new bool[capacity];
 
-        // The bounded channel holds every available slot. Acquiring reads one and
-        // releasing returns it, which limits outstanding buffers to capacity.
         _slots = Channel.CreateBounded<int>(capacity);
         for (int slot = 0; slot < capacity; slot++)
         {
@@ -44,7 +42,7 @@ internal sealed class BufferPool
         return new PooledBuffer(this, slot, _bytes[slot], _lines[slot]);
     }
 
-    internal void Release(int slot)
+    public void Release(int slot)
     {
         if (!_outstanding[slot])
         {
@@ -66,7 +64,7 @@ internal readonly struct PooledBuffer : IDisposable
     public byte[]           Bytes { get; }
     public LineDescriptor[] Lines { get; }
 
-    internal PooledBuffer(BufferPool pool, int slot, byte[] bytes, LineDescriptor[] lines)
+    public PooledBuffer(BufferPool pool, int slot, byte[] bytes, LineDescriptor[] lines)
     {
         _pool = pool;
         _slot = slot;

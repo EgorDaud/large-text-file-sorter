@@ -167,9 +167,37 @@ public sealed class LineParserTests
         Assert.Equal(line[3..], line[stringStart..].ToArray());
     }
 
-    // There is no test here for the operator-facing diagnostic: TryParse returns false
-    // and carries no position, because the caller is what knows the byte offset and the
-    // line number. ChunkReader owns that diagnostic and is tested for it.
+    [Theory]
+    [Trait("Case", "LP-26")]
+    [InlineData("12\0. x")]
+    [InlineData("12\0\0\0. x")]
+    [InlineData("12². x")]
+    [InlineData("+-5. x")]
+    [InlineData("1\t. x")]
+    [InlineData("\0 12. x")]
+    [InlineData("1\02. x")]
+    [InlineData("+. x")]
+    [InlineData("-. x")]
+    [InlineData("++1. x")]
+    [InlineData("1+. x")]
+    [InlineData(" 1. x")]
+    [InlineData("1 . x")]
+    public void Parsing_a_number_field_outside_the_sign_and_ascii_digits_grammar_is_malformed(string line)
+    {
+        AssertMalformed(System.Text.Encoding.Latin1.GetBytes(line));
+    }
+
+    [Theory]
+    [Trait("Case", "LP-27")]
+    [InlineData("-0. x", 0L)]
+    [InlineData("+5. x", 5L)]
+    [InlineData("007. x", 7L)]
+    [InlineData("-9223372036854775808. x", long.MinValue)]
+    [InlineData("0000000000000000000000042. x", 42L)]
+    public void Parsing_a_number_field_that_matches_the_grammar_accepts_it(string line, long expected)
+    {
+        AssertParses(System.Text.Encoding.Latin1.GetBytes(line), expected, "x");
+    }
 
     private static void AssertParses(ReadOnlySpan<byte> line, long expectedNumber, string expectedStringPart)
     {

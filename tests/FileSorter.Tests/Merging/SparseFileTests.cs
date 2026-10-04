@@ -1,30 +1,14 @@
 using FileSorter.Merging;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Merging;
 
-/// <summary>
-/// <see cref="SparseFile"/> is a thin, Windows-only wrapper around FSCTL_SET_SPARSE, so
-/// these tests exercise the real filesystem rather than a stub: there is no in-memory
-/// stand-in for "does NTFS actually track a hole instead of zero-filling it."
-/// </summary>
 public sealed class SparseFileTests : IDisposable
 {
-    private readonly string _directory =
-        Path.Combine(Path.GetTempPath(), "FileSorterTests", Guid.NewGuid().ToString("N"));
+    private readonly TempDirectory _directory = new();
 
-    public SparseFileTests()
-    {
-        Directory.CreateDirectory(_directory);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_directory))
-        {
-            Directory.Delete(_directory, recursive: true);
-        }
-    }
+    public void Dispose() => _directory.Dispose();
 
     [Fact]
     [Trait("Case", "SF-01")]
@@ -32,7 +16,7 @@ public sealed class SparseFileTests : IDisposable
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "FSCTL_SET_SPARSE is a Windows-only, NTFS-only mechanism.");
 
-        string path = Path.Combine(_directory, "fresh.bin");
+        string path = Path.Combine(_directory.Path, "fresh.bin");
         using (FileStream stream = new(path, FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite))
         {
             Assert.SkipUnless(SparseFile.TryMarkSparse(stream.SafeFileHandle), "this volume does not support sparse files.");
@@ -47,12 +31,12 @@ public sealed class SparseFileTests : IDisposable
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "FSCTL_SET_SPARSE is a Windows-only, NTFS-only mechanism.");
 
-        const long length = 64 * 1024 * 1024; // 64 MiB
-        const long writeOffset = 60 * 1024 * 1024; // 60 MiB in, comfortably past VDL 0
+        const long length = 64 * 1024 * 1024;
+        const long writeOffset = 60 * 1024 * 1024;
         byte[] payload = new byte[1024];
         Array.Fill(payload, (byte)0xAB);
 
-        string path = Path.Combine(_directory, "sparse.bin");
+        string path = Path.Combine(_directory.Path, "sparse.bin");
         using (FileStream stream = new(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.ReadWrite))
         {
             Assert.SkipUnless(SparseFile.TryMarkSparse(stream.SafeFileHandle), "this volume does not support sparse files.");
@@ -65,10 +49,6 @@ public sealed class SparseFileTests : IDisposable
 
         using (FileStream verify = new(path, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            // The untouched region before the write -- the hole the sparse marking exists
-            // to avoid zero-filling on disk -- still reads back as zero, exactly as an
-            // ordinary zero-filled extension would, because a hole is a promise about what
-            // NTFS stores, not about what a reader observes.
             byte[] holeProbe = new byte[4096];
             verify.Position = 0;
             int readAtStart = verify.ReadAtLeast(holeProbe, holeProbe.Length, throwOnEndOfStream: false);
@@ -91,17 +71,12 @@ public sealed class SparseFileTests : IDisposable
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "FSCTL_SET_SPARSE is a Windows-only, NTFS-only mechanism.");
 
-        // Verified empirically on this project's development machine (NTFS, Windows 11):
-        // FSCTL_SET_SPARSE with SetSparse = FALSE succeeds once every byte of the file has
-        // actually been written, because there is then no sparse range left for NTFS to
-        // track. This test pins that finding rather than guessing at it; if a future NTFS
-        // or a different volume ever refuses the clear on a fully written file, this is
-        // the test that will say so.
-        const int length = 4 * 1024 * 1024; // 4 MiB, small enough to fill entirely and quickly
+        // Empirical (NTFS, Windows 11): clearing sparse succeeds once every byte has been written.
+        const int length = 4 * 1024 * 1024;
         byte[] block = new byte[64 * 1024];
         Array.Fill(block, (byte)0xCD);
 
-        string path = Path.Combine(_directory, "cleared.bin");
+        string path = Path.Combine(_directory.Path, "cleared.bin");
         using (FileStream stream = new(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.ReadWrite))
         {
             Assert.SkipUnless(SparseFile.TryMarkSparse(stream.SafeFileHandle), "this volume does not support sparse files.");

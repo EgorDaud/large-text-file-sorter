@@ -7,9 +7,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Shared\Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="TestFileGenerator.Tests" />
-    <!-- The round-trip test needs both copies of the line grammar. -->
     <InternalsVisibleTo Include="FileSorter.Tests" />
+    <InternalsVisibleTo Include="FileSorter.Benchmarks" />
   </ItemGroup>
 
 </Project>

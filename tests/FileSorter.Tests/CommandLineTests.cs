@@ -1,5 +1,4 @@
-using FileSorter.Startup;
-using FileSorter.Verification;
+using FileSorter.Cli;
 using Xunit;
 
 namespace FileSorter.Tests;
@@ -14,11 +13,11 @@ public sealed class CommandLineTests
         Assert.NotNull(options);
         Assert.Equal("in.txt", options.InputPath);
         Assert.Equal("out.txt", options.OutputPath);
-        Assert.Equal(".", options.TempDirectory); // out.txt has no directory component
+        Assert.Equal(".", options.TempDirectory);
         Assert.Equal(1L * 1024 * 1024 * 1024, options.MemoryBudgetBytes);
         Assert.Equal(64 * 1024, options.MaxLineLength);
         Assert.Equal(Environment.ProcessorCount, options.Parallelism);
-        Assert.Equal(Pipeline.Akka, options.Pipeline);
+        Assert.Equal(Pipeline.Channels, options.Pipeline);
     }
 
     [Fact]
@@ -41,19 +40,17 @@ public sealed class CommandLineTests
                 "--memory", "2GiB",
                 "--max-line", "128KiB",
                 "--parallelism", "3",
-                "--pipeline", "channels",
+                "--pipeline", "akka",
             ],
             out SorterOptions? options,
             out _));
 
         Assert.Equal(
-            new SorterOptions("in.txt", "out.txt", "scratch", 2L * 1024 * 1024 * 1024, 128 * 1024, 3, Pipeline.Channels),
+            new SorterOptions("in.txt", "out.txt", "scratch", 2L * 1024 * 1024 * 1024, 128 * 1024, 3, Pipeline.Akka),
             options);
     }
 
-    // Pipeline is internal, and a [Theory]'s parameters must be as accessible as
-    // the public test method itself -- expected outcomes are carried as bool
-    // (true means Akka) rather than the enum, to keep InlineData legal here.
+    // bool, not Pipeline: an internal enum cannot be a parameter of a public test method.
     [Theory]
     [InlineData("akka", true)]
     [InlineData("AKKA", true)]
@@ -120,15 +117,11 @@ public sealed class CommandLineTests
     }
 
     [Theory]
-    [InlineData("2147483632")] // int.MaxValue - 15: one past the documented ceiling
-    [InlineData("2147483647")] // int.MaxValue itself
+    [InlineData("2147483589")] // Array.MaxLength - 2
+    [InlineData("2147483631")] // int.MaxValue - 16
+    [InlineData("2147483647")] // int.MaxValue
     public void Parsing_rejects_a_max_line_value_above_the_documented_ceiling(string maxLine)
     {
-        // MemoryBudget adds small, fixed offsets (at most +3) to maxLineLength while
-        // computing buffer floors, and a value this close to int.MaxValue makes that
-        // addition wrap negative in plain int arithmetic, surfacing to the operator as
-        // a nonsensical negative minimum budget. The CLI rejects it before it ever
-        // reaches that arithmetic.
         Assert.False(CommandLine.TryParseOptions(
             ["in.txt", "out.txt", "--max-line", maxLine], out SorterOptions? options, out string? error));
 
@@ -141,10 +134,10 @@ public sealed class CommandLineTests
     public void Parsing_accepts_a_max_line_value_exactly_at_the_documented_ceiling()
     {
         Assert.True(CommandLine.TryParseOptions(
-            ["in.txt", "out.txt", "--max-line", "2147483631"], out SorterOptions? options, out _)); // int.MaxValue - 16
+            ["in.txt", "out.txt", "--max-line", "2147483588"], out SorterOptions? options, out _));
 
         Assert.NotNull(options);
-        Assert.Equal(int.MaxValue - 16, options.MaxLineLength);
+        Assert.Equal(Array.MaxLength - 3, options.MaxLineLength);
     }
 
     [Fact]
@@ -170,22 +163,22 @@ public sealed class CommandLineTests
     }
 
     [Theory]
-    [InlineData("in.txt")]                                            // no output
-    [InlineData("--memory", "1GiB")]                                  // no input, no output
-    [InlineData("in.txt", "out.txt", "--memory")]                     // value missing
-    [InlineData("in.txt", "out.txt", "--memory", "1EiB")]             // unknown unit
-    [InlineData("in.txt", "out.txt", "--memory", "-1")]               // negative
-    [InlineData("in.txt", "out.txt", "--memory", "0")]                // non-positive
-    [InlineData("in.txt", "out.txt", "--max-line", "0")]              // non-positive
-    [InlineData("in.txt", "out.txt", "--max-line", "9223372036854775807")] // exceeds int.MaxValue
-    [InlineData("in.txt", "out.txt", "--parallelism", "0")]           // non-positive
-    [InlineData("in.txt", "out.txt", "--parallelism", "-1")]          // negative
-    [InlineData("in.txt", "out.txt", "--parallelism", "1.5")]         // not an integer
-    [InlineData("in.txt", "out.txt", "--pipeline", "threads")]        // unknown pipeline
-    [InlineData("in.txt", "out.txt", "--colour", "blue")]             // unknown option
-    [InlineData("in.txt", "out.txt", "extra.txt")]                    // a third positional
-    [InlineData("", "out.txt")]                                       // empty input path
-    [InlineData("in.txt", "")]                                        // empty output path
+    [InlineData("in.txt")]
+    [InlineData("--memory", "1GiB")]
+    [InlineData("in.txt", "out.txt", "--memory")]
+    [InlineData("in.txt", "out.txt", "--memory", "1EiB")]
+    [InlineData("in.txt", "out.txt", "--memory", "-1")]
+    [InlineData("in.txt", "out.txt", "--memory", "0")]
+    [InlineData("in.txt", "out.txt", "--max-line", "0")]
+    [InlineData("in.txt", "out.txt", "--max-line", "9223372036854775807")]
+    [InlineData("in.txt", "out.txt", "--parallelism", "0")]
+    [InlineData("in.txt", "out.txt", "--parallelism", "-1")]
+    [InlineData("in.txt", "out.txt", "--parallelism", "1.5")]
+    [InlineData("in.txt", "out.txt", "--pipeline", "threads")]
+    [InlineData("in.txt", "out.txt", "--colour", "blue")]
+    [InlineData("in.txt", "out.txt", "extra.txt")]
+    [InlineData("", "out.txt")]
+    [InlineData("in.txt", "")]
     public void Parsing_when_an_argument_is_unusable_explains_which_one(params string[] args)
     {
         Assert.False(CommandLine.TryParseOptions(args, out SorterOptions? options, out string? error));
@@ -196,72 +189,57 @@ public sealed class CommandLineTests
     }
 
     [Fact]
-    public void Parsing_verify_options_with_only_the_positional_arguments_applies_the_documented_default()
+    [Trait("Case", "CL-01")]
+    public void Parsing_rejects_an_output_path_identical_to_the_input_path()
     {
-        Assert.True(CommandLine.TryParseVerifyOptions(
-            ["--verify", "in.txt", "out.txt"], out VerifyOptions? options, out _));
-
-        Assert.NotNull(options);
-        Assert.Equal("in.txt", options.InputPath);
-        Assert.Equal("out.txt", options.OutputPath);
-        Assert.Equal(64 * 1024, options.MaxLineLength); // same documented default as sort mode
-    }
-
-    [Fact]
-    public void Parsing_verify_options_honours_an_explicit_max_line()
-    {
-        Assert.True(CommandLine.TryParseVerifyOptions(
-            ["--verify", "in.txt", "out.txt", "--max-line", "128KiB"], out VerifyOptions? options, out _));
-
-        Assert.NotNull(options);
-        Assert.Equal(128 * 1024, options.MaxLineLength);
-    }
-
-    [Fact]
-    public void Parsing_verify_options_rejects_a_max_line_value_that_would_overflow_the_fixed_scan_buffer()
-    {
-        // OutputVerifier.ScanAsync allocates one fixed buffer of
-        // OutputVerifier.BaseBufferSize + maxLineLength bytes per file, so verify mode
-        // has a lower --max-line ceiling than sort mode's much larger one. A value
-        // between the two ceilings would otherwise reach that allocation and throw an
-        // unhandled ArgumentOutOfRangeException instead of a documented exit 3.
-        long ceiling = Array.MaxLength - OutputVerifier.BaseBufferSize;
-
-        Assert.False(CommandLine.TryParseVerifyOptions(
-            ["--verify", "in.txt", "out.txt", "--max-line", (ceiling + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)],
-            out VerifyOptions? options, out string? error));
+        Assert.False(CommandLine.TryParseOptions(["data.txt", "data.txt"], out SorterOptions? options, out string? error));
 
         Assert.Null(options);
-        Assert.NotNull(error);
-        Assert.Contains("--max-line", error);
+        Assert.Contains("different files", error);
     }
 
     [Fact]
-    public void Parsing_verify_options_accepts_a_max_line_value_exactly_at_the_scan_buffer_ceiling()
+    [Trait("Case", "CL-02")]
+    public void Parsing_rejects_a_relative_and_an_absolute_form_of_the_same_file()
     {
-        long ceiling = Array.MaxLength - OutputVerifier.BaseBufferSize;
+        string absolute = Path.GetFullPath("data.txt");
 
-        Assert.True(CommandLine.TryParseVerifyOptions(
-            ["--verify", "in.txt", "out.txt", "--max-line", ceiling.ToString(System.Globalization.CultureInfo.InvariantCulture)],
-            out VerifyOptions? options, out _));
+        Assert.False(CommandLine.TryParseOptions(["data.txt", absolute], out _, out string? error));
+        Assert.Contains("different files", error);
 
-        Assert.NotNull(options);
-        Assert.Equal(ceiling, (long)options.MaxLineLength);
+        Assert.False(CommandLine.TryParseOptions([absolute, "data.txt"], out _, out error));
+        Assert.Contains("different files", error);
+    }
+
+    [Fact]
+    [Trait("Case", "CL-03")]
+    public void Parsing_rejects_a_path_that_reaches_the_input_through_a_parent_segment()
+    {
+        string detour = Path.Combine("a", "..", "data.txt");
+
+        Assert.False(CommandLine.TryParseOptions(["data.txt", detour], out _, out string? error));
+        Assert.Contains("different files", error);
+    }
+
+    [Fact]
+    [Trait("Case", "CL-04")]
+    public void Parsing_rejects_paths_that_differ_only_in_case_where_the_file_system_ignores_case()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Case-insensitive path comparison is applied on Windows and macOS only.");
+
+        Assert.False(CommandLine.TryParseOptions(["Data.TXT", "data.txt"], out _, out string? error));
+        Assert.Contains("different files", error);
     }
 
     [Theory]
-    [InlineData("--verify")]                                          // no input, no output
-    [InlineData("--verify", "in.txt")]                                // no output
-    [InlineData("--verify", "in.txt", "out.txt", "extra.txt")]        // a third positional
-    [InlineData("--verify", "in.txt", "out.txt", "--memory", "1GiB")] // --memory is not a verify-mode option
-    [InlineData("--verify", "in.txt", "out.txt", "--max-line", "0")]  // non-positive
-    [InlineData("--verify", "in.txt", "out.txt", "--max-line")]       // value missing
-    public void Parsing_verify_options_when_an_argument_is_unusable_explains_which_one(params string[] args)
+    [Trait("Case", "CL-05")]
+    [InlineData("in.txt", "out.txt")]
+    [InlineData("in.txt", "in.txt.sorted")]
+    [InlineData("data.txt", "sorted/data.txt")]
+    public void Parsing_accepts_two_different_files(string input, string output)
     {
-        Assert.False(CommandLine.TryParseVerifyOptions(args, out VerifyOptions? options, out string? error));
+        Assert.True(CommandLine.TryParseOptions([input, output], out SorterOptions? options, out _));
 
-        Assert.Null(options);
-        Assert.NotNull(error);
-        Assert.NotEmpty(error);
+        Assert.NotNull(options);
     }
 }

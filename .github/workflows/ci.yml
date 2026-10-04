@@ -1,6 +1,3 @@
-# The build itself is the gate. Directory.Build.props turns the SDK analyzers and
-# the .editorconfig code-style rules into warnings, and TreatWarningsAsErrors turns
-# those into failures, so there is no separate lint step to keep in sync with it.
 name: CI
 
 on:
@@ -8,10 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
-    # Both platforms, because this is a program about file paths, byte offsets and
-    # line terminators, and those are exactly the things that differ between them.
     strategy:
       fail-fast: false
       matrix:
@@ -19,12 +18,14 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    timeout-minutes: 15
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
 
       - name: Restore
         run: dotnet restore
@@ -34,3 +35,21 @@ jobs:
 
       - name: Test
         run: dotnet test -c Release --no-build
+
+  # Release compiles out Debug.Assert; this leg runs the invariants.
+  debug-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        run: dotnet build -c Debug
+
+      - name: Test
+        run: dotnet test -c Debug --no-build

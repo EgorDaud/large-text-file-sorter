@@ -1,16 +1,11 @@
 using FileSorter.RunGeneration;
 using Xunit;
+using static FileSorter.Tests.Support.TestTimeouts;
 
 namespace FileSorter.Tests.RunGeneration;
 
 public sealed class BufferPoolTests
 {
-    // An upper bound for a saturated thread pool, not an expected duration: the release
-    // and the pending acquisition's continuation are both in-process with no I/O on the
-    // path, so a healthy run resolves in microseconds and the bound only has to be
-    // generous enough that a starved continuation is not read as a broken pool.
-    private static readonly TimeSpan BoundedWait = TimeSpan.FromSeconds(30);
-
     [Fact]
     [Trait("Case", "BP-01")]
     public async Task Acquiring_and_releasing_round_trips_a_usable_buffer()
@@ -34,13 +29,12 @@ public sealed class BufferPoolTests
         PooledBuffer held = await pool.AcquireAsync(TestContext.Current.CancellationToken);
 
         Task<PooledBuffer> pending = pool.AcquireAsync(TestContext.Current.CancellationToken).AsTask();
-        Task completedFirst = await Task.WhenAny(pending, Task.Delay(BoundedWait, TestContext.Current.CancellationToken));
 
-        Assert.NotSame(pending, completedFirst); // the wait, not the acquisition, won the race
         Assert.False(pending.IsCompleted);
+        Assert.Equal(1, pool.Outstanding);
 
         held.Dispose();
-        (await pending).Dispose(); // drains the pending acquisition so nothing leaks past the test
+        (await pending.WaitAsync(BoundedWait, TestContext.Current.CancellationToken)).Dispose();
     }
 
     [Fact]
@@ -151,10 +145,10 @@ public sealed class BufferPoolTests
 
         PooledBuffer buffer = await pool.AcquireAsync(TestContext.Current.CancellationToken);
         buffer.Dispose();
-        Assert.Throws<InvalidOperationException>(buffer.Dispose); // second release of the same buffer
+        Assert.Throws<InvalidOperationException>(buffer.Dispose);
 
         PooledBuffer neverIssued = new(pool, slot: 0, bytes: new byte[1], lines: []);
-        Assert.Throws<InvalidOperationException>(neverIssued.Dispose); // slot 0 is not outstanding
+        Assert.Throws<InvalidOperationException>(neverIssued.Dispose);
     }
 
     [Fact]
@@ -202,9 +196,6 @@ public sealed class BufferPoolTests
         second.Bytes[0] = (byte)'A';
         int recordedLength = 1;
 
-        // The buffer is not cleared: everything beyond the recorded length is still
-        // the first consumer's data. That is the deliberate trade — harmless, because
-        // the only thing a correct consumer ever reads is the recorded length itself.
         Assert.Equal((byte)'A', second.Bytes[0]);
         Assert.Equal((byte)'X', second.Bytes[recordedLength]);
         second.Dispose();

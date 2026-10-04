@@ -2,7 +2,6 @@ using System.Text;
 
 namespace TestFileGenerator.Generation;
 
-/// UTF-8 words used to generate varied string parts, including non-ASCII data.
 internal static class Vocabulary
 {
     private static readonly string[] Source =

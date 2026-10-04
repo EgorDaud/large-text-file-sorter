@@ -2,22 +2,12 @@ using CsCheck;
 using FileSorter.LineFormat;
 using FileSorter.Merging;
 using FileSorter.RunGeneration;
+using FileSorter.Tests.Support;
 using Xunit;
 
 namespace FileSorter.Tests.Properties;
 
-/// <summary>
-/// The same boundary sweep as <see cref="ChunkBoundarySweepPropertyTests"/>, driven
-/// against <see cref="RunCursor"/> instead of <see cref="ChunkReader"/>: random line
-/// lengths (some at exactly the limit), mixed <c>\n</c>/<c>\r\n</c>, random equal-size
-/// read-ahead windows, random descriptor capacities, a stream handing back only a few
-/// random bytes per read, and the same over-length injection. No BOM, because
-/// <see cref="RunCursor"/> never strips one -- a run file this sorter wrote never starts
-/// with one -- so <see cref="NaiveLineFormat.Split"/> is run with <c>stripBom: false</c>
-/// to match, and with <c>stripCarriageReturn: false</c>, since a run file's '\r' before
-/// '\n' is content this sorter carried in. The content is not sorted: the splitting
-/// logic under test is oblivious to whether it is.
-/// </summary>
+/// <summary>The <see cref="ChunkReader"/> sweep for run files, which never start with a BOM and whose '\r' is content.</summary>
 public sealed class RunCursorBoundarySweepPropertyTests
 {
     private const int MaxLineLength = RandomLineFileGen.MaxLineLength;
@@ -39,9 +29,6 @@ public sealed class RunCursorBoundarySweepPropertyTests
         int ReadCap,
         int StreamSeed);
 
-    // Two independent halves zipped at the end rather than chained through SelectMany:
-    // no generator's range depends on an earlier value, since malformedIndex needs only
-    // lines.Count and streamSeed, both in hand by the combining step.
     private static readonly Gen<(List<RandomLineFileGen.LineSpec> Lines, int InjectRoll, bool MalformedAtEnd, int MalformedLength)> FileShape =
         Gen.Select(RandomLineFileGen.LineList(RandomLineFileGen.SweepMaxLineCount), Gen.Int[0, 3], Gen.Bool, MalformedLength,
             (lines, injectRoll, malformedAtEnd, malformedLength) => (lines, injectRoll, malformedAtEnd, malformedLength));

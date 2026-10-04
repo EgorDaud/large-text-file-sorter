@@ -2,40 +2,22 @@ using CsCheck;
 
 namespace FileSorter.Tests.Properties;
 
-/// <summary>
-/// Shared random-file building blocks for the two boundary sweeps: random line lengths
-/// including some at exactly the limit, mixed terminators, an occasional BOM, an
-/// occasional bare carriage return at end of file, and an over-length injection -- built
-/// once here rather than twice, slightly differently, in each test class.
-/// </summary>
 internal static class RandomLineFileGen
 {
     public const int MaxLineLength = 48;
 
-    // A uniform draw over [0, 3000] puts the median generated file at roughly 1500
-    // lines, tens of KiB, against the sweeps' buffer and window sizes of a little over
-    // 2 KiB, so most iterations span several fills while the low end still covers 0, 1
-    // and a handful of lines. A much smaller cap makes most files fit one buffer, which
-    // is the coverage a single-shot test already has. Small enough that both sweeps stay
-    // under about a second at 300 iterations.
+    // Large enough that most files span several of the sweeps' ~2 KiB buffer fills.
     public const int SweepMaxLineCount = 3000;
 
     public enum Terminator { LineFeed, CarriageReturnLineFeed, None }
 
     public sealed record LineSpec(byte[] Content, Terminator Terminator);
 
-    // A carriage return is deliberately allowed in content, so the sweep reaches lines
-    // that end in '\r' and lines with a '\r' in the middle; stripCarriageReturn on the
-    // reader and on the oracle is what decides how the resulting bytes read. '\n' stays
-    // excluded: embedding one would silently create a second line that this generator's
-    // LineSpec model cannot describe.
+    // '\r' is deliberately allowed in content; '\n' would split the line.
     private static readonly Gen<byte> ContentByte =
         Gen.Byte[0, 255].Where(b => b is not (byte)'\n');
 
-    // One roll in ten pins the length at exactly MaxLineLength, which a uniform draw
-    // over a 47-wide range would reach only rarely, and that boundary is the point.
-    // Never below 2: the shortest grammatically valid line is one digit and a period,
-    // and this sweep targets the splitter's byte boundaries, not the grammar edges.
+    // One roll in ten pins the length at exactly MaxLineLength, the boundary under test.
     private static readonly Gen<int> WellFormedLength =
         Gen.Int[0, 9].SelectMany(roll => roll == 0 ? Gen.Const(MaxLineLength) : Gen.Int[2, MaxLineLength - 1]);
 
@@ -45,10 +27,6 @@ internal static class RandomLineFileGen
     public static readonly Gen<Terminator> NonFinalTerminator =
         Gen.Bool.Select(crlf => crlf ? Terminator.CarriageReturnLineFeed : Terminator.LineFeed);
 
-    // Only the file's last line can be unterminated or carry a bare trailing carriage
-    // return: a CR with no LF after it anywhere is the first half of a "\r\n" whose LF
-    // never arrived, which can only happen where the file ends. Public: LineEntryGen
-    // reuses this exact model rather than building a second one of the same four shapes.
     public static readonly Gen<(Terminator Terminator, bool TrailingCarriageReturn)> FinalTerminatorSpec =
         Gen.Select(Gen.Int[0, 2], Gen.Bool, (n, trailingCr) => (
             n switch
@@ -85,9 +63,6 @@ internal static class RandomLineFileGen
         return content;
     }
 
-    /// Fixed filler, unlike <see cref="BuildContent"/>'s generated one: an injected
-    /// over-length line only needs to be long, and its grammar is never parsed, because
-    /// LineCursor's length check throws before Describe is reached.
     public static byte[] BuildOverLongContent(int length)
     {
         byte[] content = new byte[length];
@@ -124,11 +99,6 @@ internal static class RandomLineFileGen
         return stream.ToArray();
     }
 
-    /// Replaces one line (or appends a new one) with an over-length line, so reading the
-    /// file fails exactly there. <paramref name="atEnd"/> makes it the file's final,
-    /// unterminated line, which exercises LineCursor's no-newline branch since no LF can
-    /// still arrive; otherwise it replaces an existing, terminated line in place and
-    /// exercises the terminated branch.
     public static List<LineSpec> InjectMalformedLine(
         IReadOnlyList<LineSpec> lines, bool atEnd, int index, int malformedLength)
     {
