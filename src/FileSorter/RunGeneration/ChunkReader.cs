@@ -45,32 +45,17 @@ internal sealed class ChunkReader : IAsyncDisposable
 
     public async ValueTask<Chunk?> ReadNextAsync(CancellationToken ct)
     {
-        if (_prefetch is null)
-        {
-            PooledBuffer first = await _pool.AcquireAsync(ct);
-            try
-            {
-                int firstRead = await FillAsync(first.Bytes, _reserve, first.Bytes.Length - _reserve, ct);
-                _prefetch = new Prefetch(first, CarryLength: 0, SpanStart: _reserve, Task.FromResult(firstRead), CountIsCapped: false);
-            }
-            catch
-            {
-                first.Dispose();
-                throw;
-            }
-        }
-
-        Prefetch current = _prefetch.Value;
-        PooledBuffer slot = current.Slot;
+        Prefetch current = _prefetch ?? await StartFirstPrefetchAsync(ct);
         _prefetch = null;
+
+        // From here this call owns the slot: it goes to the caller inside the Chunk, or is released on any other exit.
+        PooledBuffer slot = current.Slot;
 
         try
         {
             int freshCount = await current.FillTask;
             BytesConsumed += freshCount;
             int totalBytes = current.CarryLength + freshCount;
-
-            bool thisExhausted = !current.CountIsCapped && freshCount < _fillAmount;
 
             if (totalBytes == 0)
             {
@@ -79,25 +64,18 @@ internal sealed class ChunkReader : IAsyncDisposable
             }
 
             PooledBuffer next = await _pool.AcquireAsync(ct);
-            Task<int> nextFillTask;
-            try
-            {
-                nextFillTask = FillAsync(next.Bytes, _reserve, next.Bytes.Length - _reserve, ct);
-            }
-            catch
-            {
-                next.Dispose();
-                throw;
-            }
+            Task<int> nextFillTask = FillAsync(next.Bytes, ct);
+
+            bool thisExhausted = !current.CountIsCapped && freshCount < _fillAmount;
 
             int count;
             int carryOffset;
-            int carryOverLength;
+            int carryLength;
             try
             {
                 count = ParseLines(
                     slot, current.SpanStart, totalBytes, BytesConsumed - totalBytes, thisExhausted,
-                    out carryOffset, out carryOverLength);
+                    out carryOffset, out carryLength);
                 LinesRead += count;
             }
             catch
@@ -106,14 +84,7 @@ internal sealed class ChunkReader : IAsyncDisposable
                 throw;
             }
 
-            if (!thisExhausted || carryOverLength > 0)
-            {
-                await FoldCarryIntoNextAsync(next, nextFillTask, slot.Bytes, carryOffset, carryOverLength);
-            }
-            else
-            {
-                await ReleaseUnusedPrefetchAsync(next, nextFillTask);
-            }
+            await HandOverNextSlotAsync(next, nextFillTask, slot.Bytes, thisExhausted, carryOffset, carryLength);
 
             return new Chunk(slot, count);
         }
@@ -122,6 +93,13 @@ internal sealed class ChunkReader : IAsyncDisposable
             slot.Dispose();
             throw;
         }
+    }
+
+    // A failed or cancelled fill surfaces when ReadNextAsync awaits it, and that call releases the slot.
+    private async ValueTask<Prefetch> StartFirstPrefetchAsync(CancellationToken ct)
+    {
+        PooledBuffer first = await _pool.AcquireAsync(ct);
+        return new Prefetch(first, CarryLength: 0, SpanStart: _reserve, FillAsync(first.Bytes, ct), CountIsCapped: false);
     }
 
     private int ParseLines(
@@ -163,23 +141,36 @@ internal sealed class ChunkReader : IAsyncDisposable
         return count;
     }
 
-    private async ValueTask FoldCarryIntoNextAsync(
+    // Takes ownership of next: it becomes the prefetch with the carry in front of its fresh bytes, or it is released.
+    private async ValueTask HandOverNextSlotAsync(
+        PooledBuffer next, Task<int> nextFillTask, byte[] previousBuffer, bool thisExhausted, int carryOffset, int carryLength)
+    {
+        if (thisExhausted && carryLength == 0)
+        {
+            await ReleaseUnusedPrefetchAsync(next, nextFillTask);
+        }
+        else if (carryLength <= _reserve)
+        {
+            int spanStart = _reserve - carryLength;
+            if (carryLength > 0)
+            {
+                Array.Copy(previousBuffer, carryOffset, next.Bytes, spanStart, carryLength);
+            }
+
+            _prefetch = new Prefetch(next, carryLength, spanStart, nextFillTask, CountIsCapped: false);
+        }
+        else
+        {
+            await RebuildAroundOversizedCarryAsync(next, nextFillTask, previousBuffer, carryOffset, carryLength);
+        }
+    }
+
+    // The only place the overlap is lost: the carry goes before bytes that are already in next, so its fill must be over.
+    private async ValueTask RebuildAroundOversizedCarryAsync(
         PooledBuffer next, Task<int> nextFillTask, byte[] previousBuffer, int carryOffset, int carryLength)
     {
         try
         {
-            if (carryLength <= _reserve)
-            {
-                int spanStart = _reserve - carryLength;
-                if (carryLength > 0)
-                {
-                    Array.Copy(previousBuffer, carryOffset, next.Bytes, spanStart, carryLength);
-                }
-
-                _prefetch = new Prefetch(next, carryLength, spanStart, nextFillTask, CountIsCapped: false);
-                return;
-            }
-
             int read = await nextFillTask;
 
             int keep = Math.Min(read, next.Bytes.Length - carryLength);
@@ -197,10 +188,7 @@ internal sealed class ChunkReader : IAsyncDisposable
                 Array.Copy(next.Bytes, _reserve, next.Bytes, carryLength, keep);
             }
 
-            if (carryLength > 0)
-            {
-                Array.Copy(previousBuffer, carryOffset, next.Bytes, 0, carryLength);
-            }
+            Array.Copy(previousBuffer, carryOffset, next.Bytes, 0, carryLength);
 
             _prefetch = new Prefetch(next, carryLength, SpanStart: 0, Task.FromResult(keep), CountIsCapped: overflow > 0);
         }
@@ -227,6 +215,7 @@ internal sealed class ChunkReader : IAsyncDisposable
         }
     }
 
+    // A primary exception is already propagating, and one thrown from here would replace it.
     private static async ValueTask ReleaseUnusedPrefetchDuringUnwindAsync(PooledBuffer slot, Task<int> fillTask)
     {
         try
@@ -253,12 +242,12 @@ internal sealed class ChunkReader : IAsyncDisposable
         return descriptor;
     }
 
-    private async Task<int> FillAsync(byte[] buffer, int destinationOffset, int destinationLength, CancellationToken ct)
+    private async Task<int> FillAsync(byte[] buffer, CancellationToken ct)
     {
-        int fromPending = Math.Min(_pendingLength, destinationLength);
+        int fromPending = Math.Min(_pendingLength, _fillAmount);
         if (fromPending > 0)
         {
-            Array.Copy(_pending, 0, buffer, destinationOffset, fromPending);
+            Array.Copy(_pending, 0, buffer, _reserve, fromPending);
 
             int remainingPending = _pendingLength - fromPending;
             if (remainingPending > 0)
@@ -270,8 +259,8 @@ internal sealed class ChunkReader : IAsyncDisposable
         }
 
         int fromInput = await _input.ReadAtLeastAsync(
-            buffer.AsMemory(destinationOffset + fromPending, destinationLength - fromPending),
-            destinationLength - fromPending, throwOnEndOfStream: false, ct);
+            buffer.AsMemory(_reserve + fromPending, _fillAmount - fromPending),
+            _fillAmount - fromPending, throwOnEndOfStream: false, ct);
         return fromPending + fromInput;
     }
 

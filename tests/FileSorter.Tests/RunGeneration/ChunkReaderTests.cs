@@ -1,7 +1,9 @@
 using System.Text;
 using FileSorter.LineFormat;
 using FileSorter.RunGeneration;
+using FileSorter.Tests.Properties;
 using Xunit;
+using static FileSorter.Tests.Support.TestTimeouts;
 
 namespace FileSorter.Tests.RunGeneration;
 
@@ -462,6 +464,286 @@ public sealed class ChunkReaderTests
         Assert.Equal(0, pool.Outstanding);
     }
 
+    [Fact]
+    public async Task Reading_mixed_terminators_one_byte_per_read_splits_every_line_and_keeps_a_lone_cr_as_content()
+    {
+        byte[] data = "1. a\r\n2. b\n3. x\ry\r\n4. d\r"u8.ToArray();
+        using MemoryStream memory = new(data);
+        using LimitedReadStream input = new(memory, maxBytesPerRead: 1, new Random(1));
+        BufferPool pool = new(bufferSize: 24, descriptorCapacity: 2, capacity: 2);
+        ChunkReader reader = new(input, pool, maxLineLength: 8);
+
+        List<string> lines = [];
+        while (await reader.ReadNextAsync(TestContext.Current.CancellationToken) is { } chunk)
+        {
+            lines.AddRange(ReadBack(chunk));
+            chunk.Buffer.Dispose();
+        }
+
+        Assert.Equal(["1. a", "2. b", "3. x\ry", "4. d"], lines);
+        Assert.Equal(data.Length, reader.BytesConsumed);
+        Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Fact]
+    public async Task Reading_one_byte_per_read_gives_the_same_lines_on_the_oversized_carry_path()
+    {
+        string[] expected = [.. Enumerable.Repeat("1.", 200)];
+        byte[] data = Encoding.UTF8.GetBytes(string.Concat(expected.Select(line => line + "\n")));
+        using MemoryStream memory = new(data);
+        using LimitedReadStream input = new(memory, maxBytesPerRead: 1, new Random(7));
+        BufferPool pool = new(bufferSize: 12, descriptorCapacity: 1, capacity: 2);
+        ChunkReader reader = new(input, pool, maxLineLength: 2);
+
+        List<string> lines = [];
+        while (await reader.ReadNextAsync(TestContext.Current.CancellationToken) is { } chunk)
+        {
+            lines.AddRange(ReadBack(chunk));
+            chunk.Buffer.Dispose();
+        }
+
+        Assert.Equal(expected, lines);
+        Assert.Equal(data.Length, reader.BytesConsumed);
+        Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Theory]
+    [InlineData("1. A\n2. B")]
+    [InlineData("1. A\n2. B\r")]
+    public async Task An_unterminated_final_line_is_emitted_after_descriptors_exhaust_on_the_line_before_it(string text)
+    {
+        using MemoryStream input = new(Encoding.UTF8.GetBytes(text));
+        BufferPool pool = new(bufferSize: 4096, descriptorCapacity: 1, capacity: 2);
+        ChunkReader reader = new(input, pool, maxLineLength: 1024);
+
+        Chunk? first = await reader.ReadNextAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(["1. A"], ReadBack(first!.Value));
+        first.Value.Buffer.Dispose();
+
+        Chunk? second = await reader.ReadNextAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(["2. B"], ReadBack(second!.Value));
+        second.Value.Buffer.Dispose();
+
+        Assert.Null(await reader.ReadNextAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Fact]
+    public async Task A_final_bare_carriage_return_is_still_stripped_after_the_pending_path_ran()
+    {
+        string[] expected = [.. Enumerable.Repeat("1.", 21)];
+        byte[] data = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("1.\n", 20)) + "1.\r");
+        using MemoryStream input = new(data);
+        BufferPool pool = new(bufferSize: 12, descriptorCapacity: 1, capacity: 2);
+        ChunkReader reader = new(input, pool, maxLineLength: 2);
+
+        List<string> lines = [];
+        while (await reader.ReadNextAsync(TestContext.Current.CancellationToken) is { } chunk)
+        {
+            lines.AddRange(ReadBack(chunk));
+            chunk.Buffer.Dispose();
+        }
+
+        Assert.Equal(expected, lines);
+        Assert.Equal(data.Length, reader.BytesConsumed);
+        Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Fact]
+    public async Task A_read_failure_in_the_initial_fill_releases_its_slot()
+    {
+        using ScriptedReadStream input = new("1. Apple\n"u8.ToArray(), failAtRead: 0);
+        BufferPool pool = new(bufferSize: 64, descriptorCapacity: 4, capacity: 2);
+        ChunkReader reader = new(input, pool, maxLineLength: 32);
+
+        await Assert.ThrowsAsync<IOException>(
+            () => reader.ReadNextAsync(TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Fact]
+    public async Task A_read_failure_in_a_prefetch_a_later_call_awaits_surfaces_there_and_releases_its_slot()
+    {
+        // One descriptor ends the first chunk with the rest as carry; the look-ahead read (read 2) fails.
+        using ScriptedReadStream input = new("1. A\n2. B\n3. C\n"u8.ToArray(), failAtRead: 2);
+        BufferPool pool = new(bufferSize: 4096, descriptorCapacity: 1, capacity: 2);
+        ChunkReader reader = new(input, pool, maxLineLength: 1024);
+
+        Chunk? first = await reader.ReadNextAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(["1. A"], ReadBack(first!.Value));
+        first.Value.Buffer.Dispose();
+
+        await Assert.ThrowsAsync<IOException>(
+            () => reader.ReadNextAsync(TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Fact]
+    public async Task A_read_failure_while_rebuilding_the_next_slot_releases_both_slots()
+    {
+        // Reserve 4, fill 9: the first fill takes 9 of the 12 bytes, one descriptor leaves a 6-byte carry, above Reserve.
+        using ScriptedReadStream input = new("1.\n2.\n3.\n4.\n"u8.ToArray(), failAtRead: 1);
+        BufferPool pool = new(bufferSize: 13, descriptorCapacity: 1, capacity: 2);
+        ChunkReader reader = new(input, pool, maxLineLength: 2);
+
+        await Assert.ThrowsAsync<IOException>(
+            () => reader.ReadNextAsync(TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Fact]
+    public async Task A_read_failure_in_the_abandoned_prefetch_does_not_replace_the_malformed_line_error()
+    {
+        using ScriptedReadStream input = new("1. Apple\nnotaline\n"u8.ToArray(), failAtRead: 2);
+        BufferPool pool = new(bufferSize: 4096, descriptorCapacity: 16, capacity: 2);
+        ChunkReader reader = new(input, pool, maxLineLength: 1024);
+
+        MalformedLineException failure = await Assert.ThrowsAsync<MalformedLineException>(
+            () => reader.ReadNextAsync(TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Equal(9, failure.ByteOffset);
+        Assert.Equal(2, failure.LineNumber);
+        Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Fact]
+    public async Task A_malformed_line_does_not_release_the_prefetch_slot_until_its_fill_has_finished()
+    {
+        using ScriptedReadStream input = new("1. Apple\nnotaline\n"u8.ToArray(), gateAtRead: 2);
+        BufferPool pool = new(bufferSize: 4096, descriptorCapacity: 16, capacity: 2);
+        ChunkReader reader = new(input, pool, maxLineLength: 1024);
+
+        Task<Chunk?> readTask = reader.ReadNextAsync(TestContext.Current.CancellationToken).AsTask();
+        await input.GateReached.WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
+
+        // The parse has already failed, but the look-ahead read may still be writing into its slot.
+        Assert.False(readTask.IsCompleted);
+        Assert.Equal(2, pool.Outstanding);
+
+        input.OpenGate();
+
+        await Assert.ThrowsAsync<MalformedLineException>(() => readTask);
+        Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Fact]
+    public async Task The_last_chunk_is_not_returned_until_its_speculative_fill_has_finished()
+    {
+        using ScriptedReadStream input = new("1. Apple\n"u8.ToArray(), gateAtRead: 2);
+        BufferPool pool = new(bufferSize: 4096, descriptorCapacity: 16, capacity: 2);
+        ChunkReader reader = new(input, pool, maxLineLength: 1024);
+
+        Task<Chunk?> readTask = reader.ReadNextAsync(TestContext.Current.CancellationToken).AsTask();
+        await input.GateReached.WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
+
+        Assert.False(readTask.IsCompleted);
+        Assert.Equal(2, pool.Outstanding);
+
+        input.OpenGate();
+
+        Chunk? chunk = await readTask;
+        Assert.Equal(["1. Apple"], ReadBack(chunk!.Value));
+        Assert.Equal(1, pool.Outstanding);
+        chunk.Value.Buffer.Dispose();
+        Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Fact]
+    public async Task Disposing_the_reader_waits_for_the_fill_in_flight_before_releasing_its_slot()
+    {
+        using ScriptedReadStream input = new("1. A\n2. B\n3. C\n"u8.ToArray(), gateAtRead: 2);
+        BufferPool pool = new(bufferSize: 4096, descriptorCapacity: 1, capacity: 2);
+        ChunkReader reader = new(input, pool, maxLineLength: 1024);
+
+        Chunk? chunk = await reader.ReadNextAsync(TestContext.Current.CancellationToken);
+        await input.GateReached.WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
+        Assert.Equal(2, pool.Outstanding);
+
+        Task disposeTask = reader.DisposeAsync().AsTask();
+
+        Assert.False(disposeTask.IsCompleted);
+        Assert.Equal(2, pool.Outstanding);
+
+        input.OpenGate();
+        await disposeTask;
+
+        Assert.Equal(1, pool.Outstanding);
+        chunk!.Value.Buffer.Dispose();
+        Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Fact]
+    public async Task Cancellation_during_the_initial_fill_releases_its_slot()
+    {
+        using ScriptedReadStream input = new("1. Apple\n"u8.ToArray(), gateAtRead: 0);
+        BufferPool pool = new(bufferSize: 64, descriptorCapacity: 4, capacity: 2);
+        ChunkReader reader = new(input, pool, maxLineLength: 32);
+        using CancellationTokenSource cts = new();
+
+        Task<Chunk?> readTask = reader.ReadNextAsync(cts.Token).AsTask();
+        await input.GateReached.WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
+        Assert.Equal(1, pool.Outstanding);
+
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => readTask);
+        Assert.Equal(0, pool.Outstanding);
+
+        await reader.DisposeAsync();
+        Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Fact]
+    public async Task Cancellation_while_a_call_awaits_its_prefetch_fill_releases_that_slot()
+    {
+        using ScriptedReadStream input = new("1. A\n2. B\n3. C\n"u8.ToArray(), gateAtRead: 2);
+        BufferPool pool = new(bufferSize: 4096, descriptorCapacity: 1, capacity: 2);
+        ChunkReader reader = new(input, pool, maxLineLength: 1024);
+        using CancellationTokenSource cts = new();
+
+        Chunk? first = await reader.ReadNextAsync(cts.Token);
+        first!.Value.Buffer.Dispose();
+        await input.GateReached.WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
+
+        // The prefetch fill observes the token of the call that started it, so both calls share one.
+        Task<Chunk?> readTask = reader.ReadNextAsync(cts.Token).AsTask();
+        Assert.False(readTask.IsCompleted);
+        Assert.Equal(1, pool.Outstanding);
+
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => readTask);
+        Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Fact]
+    public async Task Cancellation_during_the_last_chunks_speculative_fill_still_returns_the_chunk_it_had_read()
+    {
+        // The chunk was fully read before the cancel; the caller's token reports it on the next call.
+        using ScriptedReadStream input = new("1. Apple\n"u8.ToArray(), gateAtRead: 2);
+        BufferPool pool = new(bufferSize: 4096, descriptorCapacity: 16, capacity: 2);
+        ChunkReader reader = new(input, pool, maxLineLength: 1024);
+        using CancellationTokenSource cts = new();
+
+        Task<Chunk?> readTask = reader.ReadNextAsync(cts.Token).AsTask();
+        await input.GateReached.WaitAsync(BoundedWait, TestContext.Current.CancellationToken);
+
+        await cts.CancelAsync();
+
+        Chunk? chunk = await readTask;
+        Assert.Equal(["1. Apple"], ReadBack(chunk!.Value));
+        Assert.Equal(1, pool.Outstanding);
+        chunk.Value.Buffer.Dispose();
+        Assert.Equal(0, pool.Outstanding);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => reader.ReadNextAsync(cts.Token).AsTask());
+        Assert.Equal(0, pool.Outstanding);
+    }
+
     private static string[] ReadBack(Chunk chunk)
     {
         string[] result = new string[chunk.Count];
@@ -503,6 +785,70 @@ public sealed class ChunkReaderTests
             }
 
             return _inner.ReadAsync(buffer, cancellationToken);
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _inner.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+
+    // Reads are numbered from 0 across every ReadAsync call. A fill that stops short spends one extra read on the zero,
+    // because ReadAtLeastAsync can only learn of end of stream from a read that returns 0.
+    private sealed class ScriptedReadStream(byte[] data, int gateAtRead = -1, int failAtRead = -1) : Stream
+    {
+        private readonly MemoryStream _inner = new(data);
+        private readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _gateReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _reads;
+
+        public Task GateReached => _gateReached.Task;
+
+        public void OpenGate() => _gate.TrySetResult();
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            int index = _reads++;
+            if (index == failAtRead)
+            {
+                throw new IOException("simulated read failure");
+            }
+
+            if (gateAtRead >= 0 && index >= gateAtRead)
+            {
+                _gateReached.TrySetResult();
+                await _gate.Task.WaitAsync(cancellationToken);
+            }
+
+            return await _inner.ReadAsync(buffer, cancellationToken);
         }
 
         public override void Flush()
