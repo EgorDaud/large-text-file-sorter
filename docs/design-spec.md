@@ -222,7 +222,7 @@ internal delegate Task<IReadOnlyList<string>> RunGenerationStrategy(
 - **`AkkaRunGeneration`** (`--pipeline akka`): `Source.UnfoldAsync` → `SelectAsyncUnordered(parallelism, chunk => Task.Run(() => spill(...)))` → `Sink.Seq`.
   - **The `Task.Run` is required.** The mapper runs on the stage's actor thread and `SpillAsync` is synchronous through the sort, so without it every chunk is sorted on one thread (3.8× Channels' time at parallelism 4, against 1.1× with it).
   - `Task.Run` gets `CancellationToken.None`, so a cancelled token cannot skip the `finally` that releases the slot.
-  - `SortCommand` creates the `ActorSystem` (`CreateQuietSystem`, logging off) only in the Akka branch.
+  - `SortCommand` creates the `ActorSystem` (`CreateQuietSystem`, logging off) only in the Akka branch, and terminates it when phase one returns, before the merge allocates.
 
 **The pool bounds in-flight work, under both strategies.** `PoolCapacity` blocks the reader before the channel bound or Akka's buffer is reached, so peak memory is a property of the plan, not the scheduler. The streaming tier asserts `BufferPool.Outstanding ≤ PoolCapacity`. A test against the channel bound would also pass with no flow control at all.
 
@@ -243,7 +243,7 @@ internal delegate Task<IReadOnlyList<string>> RunGenerationStrategy(
 
 Two implementations show that a behaviour is not specific to one scheduler. They do not show correctness under interleavings neither produced.
 
-**Sort-mode flow.** `SortCommand.RunAsync` validates in order: the input, `MemoryBudget.TryCalculate`, the output directory, `--temp`, and `VolumeCapacity.Check`. It then picks the strategy. `RunPhasesAsync` generates runs through `RunGenerationDriver` and acts on the run count:
+**Sort-mode flow.** `SortCommand.RunAsync` validates in order: the input, `MemoryBudget.TryCalculate`, the output directory, `--temp`, and `VolumeCapacity.Check`. It then picks the strategy and wraps it with read progress, which needs only the reader every strategy receives. `RunAsync` generates runs through `RunGenerationDriver` and acts on the run count:
 
 - 0 runs: `RunPlacement.PlaceEmpty`.
 - 1 run: `RunPlacement.Place`.
@@ -318,7 +318,7 @@ With one run, phase two moves it to the output instead of rewriting it, saving a
   Deleting per group keeps peak temporary usage near the input size, so the 2× capacity estimate is a true upper bound.
 - **The final pass writes straight to the output.** `OutputFile.CreateFresh` deletes an existing output rather than truncating it, because truncating through a hard link or symlink could destroy the input. A failure after the output is opened deletes the partial file. A failure before that leaves an existing output untouched.
 - **`TotalBytesToWrite` is exact**, computed once from the plan over run sizes, because runs are `\n`-normalised.
-- **Phase-one memory is released first.** `RunGenerationDriver` keeps its pool and reader as locals of a method that returns only paths, and `SortCommand` runs `GC.Collect()`. Pooled arrays live on the LOH, and the budget is a working-set claim.
+- **Phase-one memory is released first.** `RunGenerationDriver` keeps its pool and reader as locals of a method that returns only paths (it holds no clock and writes nothing to the console), and `SortCommand` runs `GC.Collect()`. Pooled arrays live on the LOH, and the budget is a working-set claim.
 - `PassesExecuted` lets MP-10 compare predicted and actual passes on a real temporary directory, with no interface.
 - **The partitioned branch.** `PartitionedMerge.TryMergeAsync` takes the merge when `MergeParallelism > 1` and the plan is a single group of every run. Multi-pass merges stay sequential. After sampling, a partition with at most one non-empty slice (all keys equal) falls back to the sequential merge. Empty slices alone do not (MP-13).
 
@@ -425,7 +425,7 @@ Runs hold one copy of the input while a merge pass writes part of another, and p
 
 ## 9. The generator
 
-`LineComposer` composes lines into a caller-supplied span, from a fixed `Vocabulary`. `FileWriter.Write` drives it into a `Stream`, so composition and sizing are tested against a `MemoryStream`. `StagedOutput.Write` writes to a `StagingFile` path and moves it into place only on success. `GenerateCommand` is the generator's `ConsoleRun`: it owns the clock, progress lines, cancellation and the exception-to-exit-code mapping, so `Program` only handles `--help`, parsing and dispatch.
+`LineComposer` composes lines into a caller-supplied span, from a fixed `Vocabulary`. `FileWriter.Write` drives it into a `Stream`, so composition and sizing are tested against a `MemoryStream`. `StagedOutput.Write` builds the composer from the options, writes to a `StagingFile` path and moves it into place only on success. `GenerateCommand` is the generator's `ConsoleRun`: it owns the clock, progress lines, cancellation and the exception-to-exit-code mapping, so `Program` only handles `--help`, parsing and dispatch.
 
 - **Sizing.** The output is whole, terminated lines up to the first line that does not fit (`TryComposeNext` returns `false`). It never overshoots and never truncates a line, because the sorter would reject a truncated line. It can therefore be up to one line short.
 - **No `--max-line` option.** Nothing the generator composes approaches 64 KiB.
@@ -525,6 +525,7 @@ A cancelled sort leaves no temporary files, which relies on D16. Progress goes t
 | D14 | `SortCommand` owns the single-run branch | `MergeExecutor` needs no `tryMove` parameter |
 | D15 | `FileWriter.Write` takes `onProgress` and a `CancellationToken` | A 100 GB write needs progress, and cancellation must exit 130 |
 | D16 | A strategy returns only after all its reads and spills finish | The caller disposes shared resources the moment it returns |
+| D17 | Read progress wraps the strategy in `SortCommand`; `RunGenerationDriver` takes no clock | The clock is used only for progress text and the layer that prints owns it. Every strategy already receives the reader, so the driver's pool-and-reader scoping is untouched |
 
 **Rejected:**
 
@@ -532,6 +533,8 @@ A cancelled sort leaves no temporary files, which relies on D16. Progress goes t
 - An interface for `MergeExecutor`: MP-10 uses a real directory.
 - Sharing the chunk sort's comparer with the merge.
 - Sharing the line grammar between the two programs: GN-09 checks it instead.
+- A `RunGenerationDriver` or `FileWriter` instance: neither keeps state between calls. After D17 each driver argument builds exactly one object or goes to the strategy, so a constructor would repeat the same list. `FileWriter`'s state lives in `LineComposer`.
+- Folding `maxLineLength` into `MemoryPlan`: it would also change `MergeExecutor` and the plan's tests for a value that is a format limit, not a memory term.
 
 ---
 

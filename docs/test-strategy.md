@@ -478,6 +478,8 @@ A chunk is one byte buffer plus a descriptor array (offset, length, number, stri
 | SL-03 | Spill held while a sibling spill throws | Task incomplete until release; `IOException`; no run created after completion |
 | SL-04 | Spill held while the reader hits a malformed line | As SL-03, `MalformedLineException` |
 | SL-05 | Spill held while the caller cancels | As SL-03, `OperationCanceledException` |
+| SL-06 | `RunGenerationDriver.GenerateRunsAsync` with a stub strategy, plan parallelism 3 | Strategy sees parallelism 3 and a reader and spill that produce a sorted run |
+| SL-07 | The same stub strategy throws | The input has no open handle afterwards (an exclusive open succeeds) |
 
 ### Startup ownership tests (TR)
 
@@ -509,7 +511,7 @@ A chunk is one byte buffer plus a descriptor array (offset, length, number, stri
 
 ### Progress-wrapper tests (PR)
 
-`Infrastructure/ProgressReporterTests.cs` drives `ProgressReporter.RunWithProgressAsync`, which `RunGenerationDriver` and `SortCommand` use.
+`Infrastructure/ProgressReporterTests.cs` drives `ProgressReporter.RunWithProgressAsync`, which `SortCommand` uses for read and merge progress.
 
 | ID | Condition | Expected |
 |---|---|---|
@@ -603,7 +605,7 @@ A chunk is one byte buffer plus a descriptor array (offset, length, number, stri
 | Performance | KM-12 (single-run move), MP-05/08/09 (no wasted passes), MP-10, CM-02, CM-07, LP-22, OC-16, BP-10. Benchmarks and [measurements.md](measurements.md) give throughput. |
 | Memory | BP-02/04/05/06/07/09/10, MB-01 to MB-15, PB-20 to PB-23, CB-03, CB-12, KM-11, SC-01 to SC-08, KM-14, `--flatness`. |
 | Test coverage | Byte-identity properties PB-01, PB-02, PB-13 and PB-24, mutation-checked. Determinism: OC-13, OC-14, CS-08, MB-08, GN-05, PB-02. Every case is traceable by trait. |
-| Concurrency | BP-06; PB-12 and ET-03 (partitioned = sequential); SL-01 to SL-05; `RunGenerationStrategyTests`; MB-08. |
+| Concurrency | BP-06; PB-12 and ET-03 (partitioned = sequential); SL-01 to SL-07; `RunGenerationStrategyTests`; MB-08. |
 | Edge cases | LP-02 to LP-27; CB-05, CB-07, CB-08, CB-12, CB-14 to CB-19; OC-13, OC-14, OC-17; KM-05 to KM-09, KM-13; MP-02, MP-05, MP-06, MP-08; SC-03, SC-05; GN-02, GN-07, GN-08; ET-11 to ET-19. |
 
 ### Decisions

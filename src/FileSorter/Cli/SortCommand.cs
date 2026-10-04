@@ -36,32 +36,17 @@ internal static class SortCommand
 
         Stopwatch clock = Stopwatch.StartNew();
 
-        if (options.Pipeline is Pipeline.Akka)
+        // Only the Akka pipeline has a system, and only phase one uses it: it terminates before the merge allocates.
+        IReadOnlyList<string> runPaths;
+        using (ActorSystem? system = options.Pipeline is Pipeline.Akka ? AkkaRunGeneration.CreateQuietSystem("sorter") : null)
         {
-            using ActorSystem system = AkkaRunGeneration.CreateQuietSystem("sorter");
-            await RunPhasesAsync(
-                options, inputInfo, plan, runs, AkkaRunGeneration.Strategy(system.Materializer()), clock, ct);
-        }
-        else
-        {
-            await RunPhasesAsync(options, inputInfo, plan, runs, ChannelRunGeneration.RunAsync, clock, ct);
-        }
+            RunGenerationStrategy strategy = system is null
+                ? ChannelRunGeneration.RunAsync
+                : AkkaRunGeneration.Strategy(system.Materializer());
 
-        Console.Error.WriteLine($"Sorted {ByteSize.Describe(inputInfo.Length)} in {clock.Elapsed.TotalSeconds:F1}s.");
-        return ExitCodes.Success;
-    }
-
-    private static async Task RunPhasesAsync(
-        SorterOptions options,
-        FileInfo inputInfo,
-        MemoryPlan plan,
-        TemporaryRunSet runs,
-        RunGenerationStrategy strategy,
-        Stopwatch clock,
-        CancellationToken ct)
-    {
-        IReadOnlyList<string> runPaths =
-            await RunGenerationDriver.GenerateRunsAsync(inputInfo, options.MaxLineLength, plan, runs, strategy, clock, ct);
+            runPaths = await RunGenerationDriver.GenerateRunsAsync(
+                inputInfo.FullName, options.MaxLineLength, plan, runs, WithReadProgress(strategy, inputInfo.Length, clock), ct);
+        }
 
         Console.Error.WriteLine($"  phase one produced {runPaths.Count} run(s) ({clock.Elapsed.TotalSeconds:F1}s)");
 
@@ -88,6 +73,27 @@ internal static class SortCommand
 
             MergeReporter.ReportSummary(executor);
         }
+
+        Console.Error.WriteLine($"Sorted {ByteSize.Describe(inputInfo.Length)} in {clock.Elapsed.TotalSeconds:F1}s.");
+        return ExitCodes.Success;
+    }
+
+    // The reader exists only inside the driver, but every strategy receives it, so progress can wrap the strategy.
+    private static RunGenerationStrategy WithReadProgress(
+        RunGenerationStrategy strategy, long inputBytes, Stopwatch clock) =>
+        (reader, spill, parallelism, ct) => ProgressReporter.RunWithProgressAsync(
+            progressCt => ReportReadProgressAsync(reader, inputBytes, clock, progressCt),
+            () => strategy(reader, spill, parallelism, ct),
+            ct);
+
+    // Reads BytesConsumed without locking; aligned long reads are atomic on 64-bit targets.
+    private static Task ReportReadProgressAsync(
+        ChunkReader reader, long inputBytes, Stopwatch clock, CancellationToken ct)
+    {
+        string ofTotal = inputBytes > 0 ? $" of {ByteSize.Describe(inputBytes)}" : string.Empty;
+        return ProgressReporter.TickAsync(
+            () => $"  read {ByteSize.Describe(reader.BytesConsumed)}{ofTotal} ({clock.Elapsed.TotalSeconds:F1}s)",
+            ct);
     }
 
     private static MemoryPlan PlanMemory(SorterOptions options)

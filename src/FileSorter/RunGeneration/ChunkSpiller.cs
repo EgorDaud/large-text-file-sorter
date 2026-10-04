@@ -41,7 +41,7 @@ internal sealed class ChunkSpiller
             file.SetLength(totalBytes);
 
             // Per-call buffer: one ChunkSpiller serves concurrent spills.
-            LineStager stager = CreateFileStager(new byte[_spillBufferSize], file, ct);
+            LineStager stager = new(new byte[_spillBufferSize], data => file.WriteAsync(data, ct));
             for (int i = 0; i < chunk.Count; i++)
             {
                 LineDescriptor line = lines[i];
@@ -67,7 +67,4 @@ internal sealed class ChunkSpiller
             chunk.Buffer.Dispose();
         }
     }
-
-    private static LineStager CreateFileStager(byte[] buffer, FileStream file, CancellationToken ct) =>
-        new(buffer, data => file.WriteAsync(data, ct));
 }

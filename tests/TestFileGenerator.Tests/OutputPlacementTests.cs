@@ -29,9 +29,8 @@ public sealed class OutputPlacementTests : IDisposable
         File.WriteAllText(outputPath, "stale content from an earlier run\n");
 
         GeneratorOptions options = new(outputPath, TargetBytes: 256, Seed: 1, DuplicateRatio: 0.1);
-        LineComposer composer = new(options);
 
-        long written = StagedOutput.Write(options, composer, static _ => { }, TestContext.Current.CancellationToken);
+        long written = StagedOutput.Write(options, static _ => { }, TestContext.Current.CancellationToken);
 
         Assert.True(written > 0);
         Assert.Equal(written, new FileInfo(outputPath).Length);
@@ -50,12 +49,11 @@ public sealed class OutputPlacementTests : IDisposable
         File.WriteAllBytes(outputPath, previousContent);
 
         GeneratorOptions options = new(outputPath, TargetBytes: 256, Seed: 1, DuplicateRatio: 0.1);
-        LineComposer composer = new(options);
 
         using (new FileStream(outputPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
         {
             Assert.Throws<UnauthorizedAccessException>(
-                () => StagedOutput.Write(options, composer, static _ => { }, TestContext.Current.CancellationToken));
+                () => StagedOutput.Write(options, static _ => { }, TestContext.Current.CancellationToken));
         }
 
         Assert.Equal(previousContent, File.ReadAllBytes(outputPath));
@@ -72,11 +70,10 @@ public sealed class OutputPlacementTests : IDisposable
         File.WriteAllBytes(outputPath, previousContent);
 
         GeneratorOptions options = new(outputPath, TargetBytes: 4 << 20, Seed: 1, DuplicateRatio: 0.1);
-        LineComposer composer = new(options);
         using CancellationTokenSource cts = new();
 
         Assert.ThrowsAny<OperationCanceledException>(
-            () => StagedOutput.Write(options, composer, _ => cts.Cancel(), cts.Token));
+            () => StagedOutput.Write(options, _ => cts.Cancel(), cts.Token));
 
         Assert.Equal(previousContent, File.ReadAllBytes(outputPath));
         Assert.Empty(Directory.GetFiles(_directory, "*.partial"));

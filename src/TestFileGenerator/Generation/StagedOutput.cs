@@ -6,9 +6,9 @@ internal static class StagedOutput
 {
     private const int OutputBufferBytes = 1 << 20;
 
-    public static long Write(
-        GeneratorOptions options, LineComposer composer, Action<long> reportProgress, CancellationToken ct)
+    public static long Write(GeneratorOptions options, Action<long> reportProgress, CancellationToken ct)
     {
+        LineComposer composer = new(options);
         string stagingPath = StagingFile.CreatePath(options.OutputPath);
         try
         {

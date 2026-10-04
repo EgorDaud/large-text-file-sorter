@@ -23,7 +23,7 @@ internal static class GenerateCommand
         long written;
         try
         {
-            written = StagedOutput.Write(options, new LineComposer(options), ReportProgress, ct);
+            written = StagedOutput.Write(options, ReportProgress, ct);
         }
         catch (OperationCanceledException)
         {

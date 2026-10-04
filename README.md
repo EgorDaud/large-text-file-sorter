@@ -9,7 +9,7 @@ Two console programs on .NET 10. **`TestFileGenerator`** writes a `<Number>. <St
 2. Banana is yellow                     30432. Something something something
 ```
 
-**A 100 GiB sort at a 6 GiB budget takes 313.4 s**; GNU `sort` takes 374.4 s on a 20 GiB file this one sorts in 54.2 s. This snapshot has 578 passing tests and warning-free Release builds on Linux and Windows; the 20 and 100 GiB sorts and the GNU comparison were recorded on the 2026-09-09 build, with the `akka` pipeline.
+**A 100 GiB sort at a 6 GiB budget takes 313.4 s**; GNU `sort` takes 374.4 s on a 20 GiB file this one sorts in 54.2 s. This snapshot has 580 passing tests and warning-free Release builds on Linux and Windows; the 20 and 100 GiB sorts and the GNU comparison were recorded on the 2026-09-09 build, with the `akka` pipeline.
 
 **Reviewing this?** [Run it in four commands](#quick-start) · [Open the code](#where-things-are) · [Check the numbers](#results) · [What it doesn't do](#limits)
 
