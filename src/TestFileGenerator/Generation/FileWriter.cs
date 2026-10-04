@@ -1,6 +1,6 @@
 namespace TestFileGenerator.Generation;
 
-/// Writes complete lines until the next line would exceed the target.
+// Writes complete lines until the next line would exceed the target.
 internal static class FileWriter
 {
     private const int LinesPerReport = 4096;

@@ -1,6 +1,6 @@
 # Design Specification
 
-Companion to [test-strategy.md](test-strategy.md), whose behavioural contract is authoritative and is not restated here. Figures come from [measurements.md](measurements.md).
+Companion to [test-strategy.md](test-strategy.md), whose behavioural contract is authoritative and is not restated here. Figures come from [measurements.md](measurements.md); a figure that names none of its sections comes from a development run on that machine whose raw output was not kept, so read it as indicative.
 
 Scope: two .NET 10 console programs. A generator writes `<Number>. <String>` lines to a byte-size target with controllable duplicate string parts. A sorter orders such a file by string part, then number, at around 100 GB under a fixed memory budget.
 
@@ -173,7 +173,7 @@ Slot indices circulate through a bounded `Channel<int>`. A `bool[]` of outstandi
 
   Starting the fill after the parse would pass every byte-identity test and overlap nothing, a mistake only measurement catches. Fresh bytes always land at `Reserve = maxLineLength + LineCursor.WindowSlack (2)`, so the fill can start before the carry is known. The 2 bytes cover a maximum-length `\r\n` line whose fill ends on the CR.
 - **When the carry fits in `Reserve`** (the common case), it is copied into `[Reserve − carry, Reserve)` and the next fill keeps running.
-- **When the carry exceeds `Reserve`**, the descriptor array filled first (D9), and the next slot is rebuilt:
+- **When the carry exceeds `Reserve`** (the descriptor array filled first, D9), the next slot is rebuilt:
   1. Its fill is awaited; this is the only place the overlap is lost.
   2. The carry goes to the head of the slot.
   3. Bytes that no longer fit wait in the pending buffer, because a forward-only stream cannot re-read them.
@@ -318,7 +318,7 @@ With one run, phase two moves it to the output instead of rewriting it, saving a
   Deleting per group keeps peak temporary usage near the input size, so the 2× capacity estimate is a true upper bound.
 - **The final pass writes straight to the output.** `OutputFile.CreateFresh` deletes an existing output rather than truncating it, because truncating through a hard link or symlink could destroy the input. A failure after the output is opened deletes the partial file. A failure before that leaves an existing output untouched.
 - **`TotalBytesToWrite` is exact**, computed once from the plan over run sizes, because runs are `\n`-normalised.
-- **Phase-one memory is released first.** `RunGenerationDriver` keeps its pool and reader as locals of a method that returns only paths (it holds no clock and writes nothing to the console), and `SortCommand` runs `GC.Collect()`. Pooled arrays live on the LOH, and the budget is a working-set claim.
+- **Phase-one memory is released first.** `RunGenerationDriver` keeps its pool and reader as locals of a method that returns only paths, and `SortCommand` runs `GC.Collect()`. Pooled arrays live on the LOH, and the budget is a working-set claim.
 - `PassesExecuted` lets MP-10 compare predicted and actual passes on a real temporary directory, with no interface.
 - **The partitioned branch.** `PartitionedMerge.TryMergeAsync` takes the merge when `MergeParallelism > 1` and the plan is a single group of every run. Multi-pass merges stay sequential. After sampling, a partition with at most one non-empty slice (all keys equal) falls back to the sequential merge. Empty slices alone do not (MP-13).
 
@@ -337,7 +337,7 @@ Every outcome other than `Verified` exits 4.
 
 ### 7.7 RangePartitioner and the partitioned merge
 
-**Why.** The merge spends about 167 ns per output line on per-core miss latency, not bandwidth (about 1.7 GB/s of traffic against roughly 50 GB/s available), so the cost divides across cores. At 20 GiB with a 4 GiB budget, the merge takes 108.2 s with one worker, 51 s with four, 37–39 s with eight, and gets slower at sixteen.
+**Why.** Development profiling put the merge at about 167 ns per output line, spent on per-core miss latency rather than bandwidth (about 1.7 GB/s of traffic against roughly 50 GB/s available), so the cost divides across cores. Development runs at 20 GiB with a 4 GiB budget gave 108.2 s with one worker, 51 s with four, 37–39 s with eight, and slower at sixteen. The recorded evidence is [measurements section 5](measurements.md#5-the-merge-worker-dimension): eight workers 53.2% faster than one in the benchmark, and a 33–34 s eight-worker merge of the 20 GiB file.
 
 **The partition.** `Locate` runs once, before any worker starts:
 
@@ -382,7 +382,7 @@ ChunkSize              > maxLineLength + 2
 MergeFanIn             ≥ 2
 ```
 
-- **Fan-in and window size are derived.** The fan-in rises to `MaxMergeFanIn` (2,048), and then the window grows, up to 4 MiB. A fixed fan-in of 64 would use 5.6 MiB of a 4 GiB budget and need two passes where the derived plan needs one.
+- **Fan-in and window size are derived.** The fan-in rises to `MaxMergeFanIn` (2,048), and then the window grows, up to 4 MiB. At 100 GiB the 4 GiB plan produces hundreds of runs, so a fixed fan-in of 64 would need two passes where the derived plan needs one.
 - **`MergeParallelism` is derived, not configured**, so it cannot make a plan infeasible. It is the largest *n* ≤ min(`parallelism`, `MaxMergeParallelism`) whose own solved window clears `maxLineLength + 2`, or 1 if none does:
 
   ```
@@ -428,6 +428,7 @@ Runs hold one copy of the input while a merge pass writes part of another, and p
 `LineComposer` composes lines into a caller-supplied span, from a fixed `Vocabulary`. `FileWriter.Write` drives it into a `Stream`, so composition and sizing are tested against a `MemoryStream`. `StagedOutput.Write` builds the composer from the options, writes to a `StagingFile` path and moves it into place only on success. `GenerateCommand` is the generator's `ConsoleRun`: it owns the clock, progress lines, cancellation and the exception-to-exit-code mapping, so `Program` only handles `--help`, parsing and dispatch.
 
 - **Sizing.** The output is whole, terminated lines up to the first line that does not fit (`TryComposeNext` returns `false`). It never overshoots and never truncates a line, because the sorter would reject a truncated line. It can therefore be up to one line short.
+- **One line buffer per file.** `FileWriter.Write` allocates its `MaxComposedLineLength` array once per call, and a call writes a whole file, so a pool would save nothing.
 - **No `--max-line` option.** Nothing the generator composes approaches 64 KiB.
 - **Reproducibility** holds only on the same .NET version, because `System.Random`'s seeded sequence can change between major versions. An owned random generator would invalidate the recorded baselines.
 - **Duplicates are guaranteed by construction.** The ratio is a proportion over the file, and a positive ratio also forces the first two lines to share a string part. Two candidate pairs are always drawn, so later output does not depend on the target, and the first that fits is written. A ratio of 0 disables both.
@@ -529,7 +530,7 @@ A cancelled sort leaves no temporary files, which relies on D16. Progress goes t
 
 **Rejected:**
 
-- Splitting `ChunkReader`: what remains is one job.
+- Splitting `ChunkReader` into a second class: private helpers already give each slot one owner on every path, and the parse-and-unwind step awaits inside a `catch`, so a class would add a result type and an async layer per chunk.
 - An interface for `MergeExecutor`: MP-10 uses a real directory.
 - Sharing the chunk sort's comparer with the merge.
 - Sharing the line grammar between the two programs: GN-09 checks it instead.

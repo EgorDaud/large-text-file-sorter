@@ -43,12 +43,12 @@ A lenient mode that diverts malformed lines is a named extension, not built.
 | Integration (IT) | Line-format shapes against real files; capacity probe on a real volume and a UNC path; cross-volume placement | `Integration/` | 9 |
 | End-to-end and verify (ET, VF) | Whole runs through `SortCommand.RunAsync` and `VerifyCommand.RunAsync` | `EndToEnd/` | 20, 14 |
 | Startup and CLI (TR, PR, CR, CL) | Private temp directory, progress wrapper, exit-code mapping, input/output identity guard | `Infrastructure/`, `Cli/`, `CommandLineTests.cs` | 7, 4, 7, 5 |
-| Streaming layer (SL) | Backpressure, prompt cancellation, every spill joined before a strategy returns | `RunGeneration/` | 5 |
+| Streaming layer (SL) | Backpressure, prompt cancellation, every spill joined before a strategy returns; the driver releases its input | `RunGeneration/` | 7 |
 | Benchmarks and manual runs | Throughput, allocation, memory flatness, real large-file behaviour | `benchmarks/` | Never in the gate |
 
 The correctness-bearing tier is the cheapest one: every ordering decision sits behind a dependency-free seam testable with in-memory bytes.
 
-Every case carries `[Trait("Case", "XX-NN")]`. The document lists 317 IDs; 315 have a trait, and PB-07 and GN-13 are marked not implemented. Diff the two sets with `grep -oE '^\| [A-Z]{2}-[0-9]+ \|' docs/test-strategy.md` against `grep -rhoE 'Trait\("Case", *"[^"]+"' tests`. IDs are never reused (LP-23 and LP-24 are retired).
+Every case in this document carries `[Trait("Case", "XX-NN")]`. The document lists 322 IDs; 320 have a trait, and PB-07 and GN-13 are marked not implemented. The suite runs 595 tests (68 generator, 527 sorter), so many tests are unnumbered: theory rows and behaviour tests such as most of `ChunkReaderTests`, which pin slot release, I/O failure and cancellation paths and map to no ID above. Diff the two sets with `grep -oE '^\| [A-Z]{2}-[0-9]+ \|' docs/test-strategy.md` against `grep -rhoE 'Trait\("Case", *"[^"]+"' tests`. IDs are never reused (LP-23 and LP-24 are retired).
 
 ### The oracle
 
@@ -604,7 +604,7 @@ A chunk is one byte buffer plus a descriptor array (offset, length, number, stri
 | Code quality | Each unit is tested without doubles. The seams (splitter vs file I/O, merge vs files, placement vs volume, capacity decision vs probe, composer vs writer) show the structure. |
 | Performance | KM-12 (single-run move), MP-05/08/09 (no wasted passes), MP-10, CM-02, CM-07, LP-22, OC-16, BP-10. Benchmarks and [measurements.md](measurements.md) give throughput. |
 | Memory | BP-02/04/05/06/07/09/10, MB-01 to MB-15, PB-20 to PB-23, CB-03, CB-12, KM-11, SC-01 to SC-08, KM-14, `--flatness`. |
-| Test coverage | Byte-identity properties PB-01, PB-02, PB-13 and PB-24, mutation-checked. Determinism: OC-13, OC-14, CS-08, MB-08, GN-05, PB-02. Every case is traceable by trait. |
+| Test coverage | Byte-identity properties PB-01, PB-02, PB-13 and PB-24, mutation-checked. Determinism: OC-13, OC-14, CS-08, MB-08, GN-05, PB-02. Every documented case is traceable by trait. |
 | Concurrency | BP-06; PB-12 and ET-03 (partitioned = sequential); SL-01 to SL-07; `RunGenerationStrategyTests`; MB-08. |
 | Edge cases | LP-02 to LP-27; CB-05, CB-07, CB-08, CB-12, CB-14 to CB-19; OC-13, OC-14, OC-17; KM-05 to KM-09, KM-13; MP-02, MP-05, MP-06, MP-08; SC-03, SC-05; GN-02, GN-07, GN-08; ET-11 to ET-19. |
 

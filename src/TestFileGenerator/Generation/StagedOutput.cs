@@ -8,6 +8,7 @@ internal static class StagedOutput
 
     public static long Write(GeneratorOptions options, Action<long> reportProgress, CancellationToken ct)
     {
+        // Built before the staging file exists, so an invalid option leaves nothing behind.
         LineComposer composer = new(options);
         string stagingPath = StagingFile.CreatePath(options.OutputPath);
         try

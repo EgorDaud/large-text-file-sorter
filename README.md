@@ -9,7 +9,7 @@ Two console programs on .NET 10. **`TestFileGenerator`** writes a `<Number>. <St
 2. Banana is yellow                     30432. Something something something
 ```
 
-**A 100 GiB sort at a 6 GiB budget takes 313.4 s**; GNU `sort` takes 374.4 s on a 20 GiB file this one sorts in 54.2 s. This snapshot has 580 passing tests and warning-free Release builds on Linux and Windows; the 20 and 100 GiB sorts and the GNU comparison were recorded on the 2026-09-09 build, with the `akka` pipeline.
+**A 100 GiB sort at a 6 GiB budget took 313.4 s**, the fastest of five runs at that budget; GNU `sort` took 374.4 s on a 20 GiB file this one sorted in 54.2 s, the faster of two paired samples ([Results](#results) has the rest). This snapshot has 595 passing tests (68 generator, 527 sorter) and warning-free Release builds, checked by CI on Linux and Windows. The 20 and 100 GiB sorts and the GNU comparison were recorded on the 2026-09-09 build, with the `akka` pipeline.
 
 **Reviewing this?** [Run it in four commands](#quick-start) · [Open the code](#where-things-are) · [Check the numbers](#results) · [What it doesn't do](#limits)
 
@@ -75,7 +75,7 @@ Each folder is one feature slice; `Infrastructure/` holds the cross-cutting plum
 ```
 src/FileSorter/   Program.cs (dispatch)
                   Cli/            SortCommand, VerifyCommand, argument parsing,
-                                  free-space preflight, exit codes
+                                  free-space preflight, exception-to-exit-code mapping
                   Planning/       memory budget and temp-capacity arithmetic
                   Infrastructure/ temp lifetime, progress, unbuffered streams
                   LineFormat/     parser, cursor, comparator
@@ -119,9 +119,9 @@ phase one:  (parallelism + 2) × (chunkSize + descriptorArray) + chunkSize + par
 phase two:  mergeWorkers × fanIn × (2 × readAheadBuffer + descriptorArray) + mergeWorkers × outputBuffer + mergeMetadata  ≤ budget
 ```
 
-Both phases share one budget. At 4 GiB with the shipped defaults the solve gives 8 merge workers, a fan-in of 2,048 each and windows of 87,193 bytes: one pass over 100 GiB, with all but 410 KB of the budget used. Each worker's window is an eighth of a sequential merge's, so eight workers cost no more window memory than one. The bounded line length keeps every line inside a chunk, which bounds the carry between reads.
+Both phases share one budget. The figures here are the solver's arithmetic, not measurements. At 4 GiB with `--parallelism` 8 or more and the other defaults the solve gives 8 merge workers, a fan-in of 2,048 each and windows of 87,193 bytes: one pass over 100 GiB, with all but 410 KB of the budget used. Each worker's window is an eighth of a sequential merge's, so eight workers cost no more window memory than one. The bounded line length keeps every line inside a chunk, which bounds the carry between reads.
 
-**One term scales with input:** the run path list, about 110 KB at the 4 GiB target but roughly 25 MB for a 4 MiB budget sorting 100 GiB. **And it bounds buffers, not process working set** (see [Results](#results)).
+**One term scales with input:** the run path list, estimated at about 110 KB at the 4 GiB target but roughly 25 MB for a 4 MiB budget sorting 100 GiB. **And it bounds buffers, not process working set** (see [Results](#results)).
 
 ### Disk requirements
 
@@ -144,11 +144,12 @@ The generator, empty input and the single-run placement stage into `<destination
 | 20 GiB | 4 GiB | **56.3 s** | 30.6 s, 186 runs | ~26 s, 8 workers | 1 |
 | 100 GiB | 6 GiB | **313.4 s** | 156.0 s, 617 runs | ~157 s, 8 workers | 1 |
 
-Both are `--verify` clean, on one Windows machine with input, temporary files and output on one NVMe volume. **GNU `sort` takes 374.4 s where this one takes 54.2 s**, in a paired series on a 20 GiB file under flags chosen to favour GNU, and its output is byte-identical: an outside oracle at a scale the test suite cannot reach.
+One Windows machine, with input, temporary files and output on one NVMe volume. The 20 GiB output was `--verify`d; of the eight 100 GiB runs, two were, and the record does not say whether the 313.4 s run was one of them. **GNU `sort` took 374.4 s where this one took 54.2 s** (the other sample: 373.3 s against 73.6 s), in a paired series on a 20 GiB file under flags chosen to favour GNU, and its output is byte-identical: an outside oracle at a scale the test suite cannot reach.
 
 [docs/measurements.md](docs/measurements.md) has the hardware, per-run diagnostics, GNU methodology and memory-flatness matrices. Three findings there qualify the table:
 
 - **The 20 GiB row is the fastest of ten consecutive runs**, on a rested drive; the median was 69.9 s, the gap being output-wait.
+- **The 100 GiB row is the fastest of five runs at 6 GiB**, which took 313.4–387.9 s.
 - **The merge tracks the drive, not the code**: summed output-wait ranged from 279.5 s to 1325.0 s across eight 100 GiB runs at 6 and 8 GiB budgets, and wall clock followed.
 - **Peak working set runs 1.8–10.0% above `--memory`**, because the guarantee bounds buffers, not the process. The 100 GiB input repeats one 20 GiB block, so it is duplicate-heavy rather than representative.
 
@@ -179,18 +180,18 @@ Decisions on what the assignment leaves open; [docs/test-strategy.md](docs/test-
 
 ### What isn't proven
 
-- **There is no byte oracle at 100 GiB.** That run is checked for order, line count and content hash against its own input; GNU `sort` supplies an independent check at 20 GiB only. The multi-pass path is exercised instead at a 256 MiB budget, where the 20 GiB file reached 3,330 concurrent temporary files and a two-pass merge at full fan-in.
+- **There is no byte oracle at 100 GiB.** The 100 GiB runs that were verified are checked for order, line count and content hash against their own input; GNU `sort` supplies an independent check at 20 GiB only. The multi-pass path is exercised instead at a 256 MiB budget, where the 20 GiB file reached 3,330 concurrent temporary files and a two-pass merge at full fan-in (a development run, not recorded in [measurements](docs/measurements.md)).
 - **Concurrency is argued structurally, not proven.** Phase one shares only the buffer pool and run registry; phase two's workers share only an interlocked progress counter. **One gap is real:** a pipeline aborting between the reader producing a chunk and the spiller receiving it leaks that buffer, which is benign since the pool dies with the process.
 
 ### What it deliberately doesn't do
 
-- **No memory-mapped I/O or SIMD comparison.** Merge workers spend well over half their time in awaited writes, so the drive's write rate is the bound, and neither technique moves it. The radix chunk sort ships because it addresses a measured cost.
+- **No memory-mapped I/O or SIMD comparison.** Merge time followed the drive in every recorded run (summed output-wait of 28–103 s at 20 GiB and 280–1,325 s at 100 GiB, [measurements](docs/measurements.md) sections 1 and 2), and neither technique would change the write rate. The radix chunk sort ships because it addresses a measured cost.
 - **A partitioned merge cannot balance adversarial data.** Identical lines cannot be split across key ranges, so one repeated key gives one worker everything. A partition with at most one non-empty slice falls back to a sequential merge, noted on stderr; any other imbalance is merged in parallel and printed.
 - **Fail fast has a cost:** one bad byte late in a large file discards the work done. A lenient mode diverting malformed lines aside is deliberately not built.
 - **`--memory` and `--parallelism` must be chosen together.** A budget too small for the fixed write-buffer cost is rejected with the minimum that would work, rather than silently lowering parallelism, which would let a *larger* budget produce a *smaller* chunk.
 - **Re-sorting the sorter's own output is not a fixpoint.** A content `\r` before the `\n` reads back as half a terminator; that is the format's ambiguity, pinned by `SortRoundTripTests` (ET-05).
 
-Smaller accepted costs: the radix sort's 6–11% penalty when every string part is identical ([measurements](docs/measurements.md#6-inside-the-chunk-sort)), the splitter search's brief 16 MiB allocation outside the guarantee and the partitioned merge's larger handle count ([design spec](docs/design-spec.md#77-rangepartitioner-and-the-partitioned-merge)), and disk exhaustion after the startup check ([test strategy](docs/test-strategy.md#residual-risks)).
+Smaller accepted costs: the radix sort's penalty of up to 11% when every string part is identical ([measurements](docs/measurements.md#6-inside-the-chunk-sort)), the splitter search's brief 16 MiB allocation outside the guarantee and the partitioned merge's larger handle count ([design spec](docs/design-spec.md#77-rangepartitioner-and-the-partitioned-merge)), and disk exhaustion after the startup check ([test strategy](docs/test-strategy.md#residual-risks)).
 
 ---
 
