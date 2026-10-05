@@ -11,6 +11,8 @@ Two console programs on .NET 10. **`TestFileGenerator`** writes a `<Number>. <St
 
 **A 100 GiB sort at a 6 GiB budget took 313.4 s**, the fastest of five runs at that budget; GNU `sort` took 374.4 s on a 20 GiB file this one sorted in 54.2 s, the faster of two paired samples ([Results](#results) has the rest). This snapshot has 595 passing tests (68 generator, 527 sorter) and warning-free Release builds, checked by CI on Linux and Windows. The 20 and 100 GiB sorts and the GNU comparison were recorded on the 2026-09-09 build, with the `akka` pipeline.
 
+**Background.** This started as a take-home for a senior .NET role: the task fixed the line format, the sort order and the ~100 GB scale, and left everything else open. Pull request [#1](https://github.com/EgorDaud/large-text-file-sorter/pull/1) is a self-review of the submitted version, finished after the hiring team's review asked for clearer entry points, explicit dependencies, shorter methods and fewer restating comments; [#2](https://github.com/EgorDaud/large-text-file-sorter/pull/2) closes the rest of those remarks, with before-and-after benchmarks.
+
 **Reviewing this?** [Run it in four commands](#quick-start) · [Open the code](#where-things-are) · [Check the numbers](#results) · [What it doesn't do](#limits)
 
 ---
@@ -157,7 +159,7 @@ One Windows machine, with input, temporary files and output on one NVMe volume. 
 
 ## Ordering rules
 
-Decisions on what the assignment leaves open; [docs/test-strategy.md](docs/test-strategy.md) pins each one to a test.
+Decisions on what the original task leaves open; [docs/test-strategy.md](docs/test-strategy.md) pins each one to a test.
 
 | Area | Rule |
 |---|---|
