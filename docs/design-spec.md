@@ -425,10 +425,10 @@ Runs hold one copy of the input while a merge pass writes part of another, and p
 
 ## 9. The generator
 
-`LineComposer` composes lines into a caller-supplied span, from a fixed `Vocabulary`. `FileWriter.Write` drives it into a `Stream`, so composition and sizing are tested against a `MemoryStream`. `StagedOutput.Write` builds the composer from the options, writes to a `StagingFile` path and moves it into place only on success. `GenerateCommand` is the generator's `ConsoleRun`: it owns the clock, progress lines, cancellation and the exception-to-exit-code mapping, so `Program` only handles `--help`, parsing and dispatch.
+`LineComposer` composes lines into a caller-supplied span, from a fixed `Vocabulary`. A `FileWriter` pairs a composer with a byte target and drives it into a `Stream`, so composition and sizing are tested against a `MemoryStream`. `StagedOutput.Write` builds the composer from the options, writes to a `StagingFile` path and moves it into place only on success. `GenerateCommand` is the generator's `ConsoleRun`: it owns the clock, progress lines, cancellation and the exception-to-exit-code mapping, so `Program` only handles `--help`, parsing and dispatch.
 
 - **Sizing.** The output is whole, terminated lines up to the first line that does not fit (`TryComposeNext` returns `false`). It never overshoots and never truncates a line, because the sorter would reject a truncated line. It can therefore be up to one line short.
-- **One line buffer per file.** `FileWriter.Write` allocates its `MaxComposedLineLength` array once per call, and a call writes a whole file, so a pool would save nothing.
+- **One line buffer per file.** A `FileWriter` allocates its `MaxComposedLineLength` array once, and it writes a whole file, so a pool would save nothing.
 - **No `--max-line` option.** Nothing the generator composes approaches 64 KiB.
 - **Reproducibility** holds only on the same .NET version, because `System.Random`'s seeded sequence can change between major versions. An owned random generator would invalidate the recorded baselines.
 - **Duplicates are guaranteed by construction.** The ratio is a proportion over the file, and a positive ratio also forces the first two lines to share a string part. Two candidate pairs are always drawn, so later output does not depend on the target, and the first that fits is written. A ratio of 0 disables both.
@@ -534,7 +534,7 @@ A cancelled sort leaves no temporary files, which relies on D16. Progress goes t
 - An interface for `MergeExecutor`: MP-10 uses a real directory.
 - Sharing the chunk sort's comparer with the merge.
 - Sharing the line grammar between the two programs: GN-09 checks it instead.
-- A `RunGenerationDriver` or `FileWriter` instance: neither keeps state between calls. After D17 each driver argument builds exactly one object or goes to the strategy, so a constructor would repeat the same list. `FileWriter`'s state lives in `LineComposer`.
+- A `RunGenerationDriver` instance: it keeps no state between calls. After D17 each argument builds exactly one object or goes to the strategy, so a constructor would repeat the same list.
 - Folding `maxLineLength` into `MemoryPlan`: it would also change `MergeExecutor` and the plan's tests for a value that is a format limit, not a memory term.
 
 ---

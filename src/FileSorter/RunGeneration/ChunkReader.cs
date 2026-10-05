@@ -273,7 +273,8 @@ internal sealed class ChunkReader : IAsyncDisposable
 
         _prefetch = null;
 
-        // The fill may still be writing into the slot and reading the stream.
+        // The fill may still be using the slot and the stream. Its result is unused, and a throw from
+        // dispose would replace the failure that stopped reading, so its outcome is deliberately ignored.
         try
         {
             await prefetch.FillTask;

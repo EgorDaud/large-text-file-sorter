@@ -9,7 +9,7 @@ internal static class StagedOutput
     public static long Write(GeneratorOptions options, Action<long> reportProgress, CancellationToken ct)
     {
         // Built before the staging file exists, so an invalid option leaves nothing behind.
-        LineComposer composer = new(options);
+        FileWriter writer = new(new LineComposer(options), options.TargetBytes);
         string stagingPath = StagingFile.CreatePath(options.OutputPath);
         try
         {
@@ -18,7 +18,7 @@ internal static class StagedOutput
                 stagingPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 OutputBufferBytes, FileOptions.SequentialScan))
             {
-                written = FileWriter.Write(output, composer, options.TargetBytes, ct, reportProgress);
+                written = writer.Write(output, ct, reportProgress);
             }
 
             File.Move(stagingPath, options.OutputPath, overwrite: true);
