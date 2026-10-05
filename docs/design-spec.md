@@ -131,7 +131,7 @@ The parser does no decoding, allocation, encoding validation or length checking 
 
 `LineCursor` is a `ref struct` over a supplied block. It yields complete lines and reports the trailing partial line (`CarryOffset`, `CarryLength`). It never sees a file, so the most defect-prone logic in the sorter can be tested in memory. It is the only implementation of the terminator rules, used over chunk buffers and over read-ahead windows, so the two phases cannot disagree about a stray `\r`.
 
-- **BOM and `\r` stripping are on by default, for the user's input.** Code that reads files the sorter wrote (`RunCursor`, `OutputVerifier`'s output scan) turns both off, because those files are `\n`-terminated and a `\r` in them is content. `RangePartitioner.ReadLineAt` applies the same rule by hand.
+- **BOM and `\r` stripping are on by default, for the user's input.** Code that reads files the sorter wrote (`RunCursor`, `OutputVerifier`'s output scan) turns both off, because those files are `\n`-terminated and a `\r` in them is content. `RangePartitioner`'s `RunProbe.ReadLineAt` applies the same rule by hand.
 - **D2: the maximum line length is enforced here.** The cursor must bound its own carry-over, and enforcing the limit at that point makes the memory guarantee structural (CB-12, CB-16).
 - Callers await the fill before running the cursor, so no instance is live across an `await`.
 
