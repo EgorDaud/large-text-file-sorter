@@ -31,9 +31,9 @@ internal static class SortHarness
     internal static void WriteGeneratedInput(string path, long targetBytes, int seed)
     {
         GeneratorOptions options = new(path, targetBytes, seed, DuplicateRatio: 0.2);
-        LineComposer composer = new(options);
+        FileWriter writer = new(new LineComposer(options), targetBytes);
         using FileStream output = new(path, FileMode.Create, FileAccess.Write);
-        FileWriter.Write(output, composer, targetBytes, TestContext.Current.CancellationToken);
+        writer.Write(output, TestContext.Current.CancellationToken);
     }
 
     internal static void AssertIsOracleSortOfInput(string inputPath, string outputPath) =>

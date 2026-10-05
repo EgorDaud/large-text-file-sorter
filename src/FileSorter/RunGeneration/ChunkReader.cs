@@ -69,13 +69,10 @@ internal sealed class ChunkReader : IAsyncDisposable
             bool thisExhausted = !current.CountIsCapped && freshCount < _fillAmount;
 
             int count;
-            int carryOffset;
-            int carryLength;
+            ReadOnlyMemory<byte> carry;
             try
             {
-                count = ParseLines(
-                    slot, current.SpanStart, totalBytes, BytesConsumed - totalBytes, thisExhausted,
-                    out carryOffset, out carryLength);
+                (count, carry) = ParseLines(slot, current.SpanStart, totalBytes, thisExhausted);
                 LinesRead += count;
             }
             catch
@@ -84,7 +81,7 @@ internal sealed class ChunkReader : IAsyncDisposable
                 throw;
             }
 
-            await HandOverNextSlotAsync(next, nextFillTask, slot.Bytes, thisExhausted, carryOffset, carryLength);
+            await HandOverNextSlotAsync(next, nextFillTask, thisExhausted, carry);
 
             return new Chunk(slot, count);
         }
@@ -102,10 +99,10 @@ internal sealed class ChunkReader : IAsyncDisposable
         return new Prefetch(first, CarryLength: 0, SpanStart: _reserve, FillAsync(first.Bytes, ct), CountIsCapped: false);
     }
 
-    private int ParseLines(
-        PooledBuffer slot, int spanStart, int totalBytes, long bufferBaseOffset, bool exhausted,
-        out int carryOffset, out int carryLength)
+    // The carry points into slot, so it stays valid only while the caller still owns the slot.
+    private (int Count, ReadOnlyMemory<byte> Carry) ParseLines(PooledBuffer slot, int spanStart, int totalBytes, bool exhausted)
     {
+        long bufferBaseOffset = BytesConsumed - totalBytes;
         int count = 0;
         LineCursor cursor = new(slot.Bytes.AsSpan(spanStart, totalBytes), _maxLineLength, bufferBaseOffset, LinesRead + 1);
 
@@ -118,8 +115,8 @@ internal sealed class ChunkReader : IAsyncDisposable
             count++;
         }
 
-        carryOffset = spanStart + cursor.CarryOffset;
-        carryLength = cursor.CarryLength;
+        int carryOffset = spanStart + cursor.CarryOffset;
+        int carryLength = cursor.CarryLength;
 
         // Descriptor exhaustion leaves carry-over, even when it contains complete lines.
         bool stoppedOnCapacity = count == slot.Lines.Length;
@@ -134,41 +131,37 @@ internal sealed class ChunkReader : IAsyncDisposable
                 count++;
             }
 
-            carryOffset += carryLength;
-            carryLength = 0;
+            return (count, ReadOnlyMemory<byte>.Empty);
         }
 
-        return count;
+        return (count, slot.Bytes.AsMemory(carryOffset, carryLength));
     }
 
     // Takes ownership of next: it becomes the prefetch with the carry in front of its fresh bytes, or it is released.
     private async ValueTask HandOverNextSlotAsync(
-        PooledBuffer next, Task<int> nextFillTask, byte[] previousBuffer, bool thisExhausted, int carryOffset, int carryLength)
+        PooledBuffer next, Task<int> nextFillTask, bool thisExhausted, ReadOnlyMemory<byte> carry)
     {
-        if (thisExhausted && carryLength == 0)
+        if (thisExhausted && carry.IsEmpty)
         {
             await ReleaseUnusedPrefetchAsync(next, nextFillTask);
         }
-        else if (carryLength <= _reserve)
+        else if (carry.Length <= _reserve)
         {
-            int spanStart = _reserve - carryLength;
-            if (carryLength > 0)
-            {
-                Array.Copy(previousBuffer, carryOffset, next.Bytes, spanStart, carryLength);
-            }
+            int spanStart = _reserve - carry.Length;
+            carry.Span.CopyTo(next.Bytes.AsSpan(spanStart));
 
-            _prefetch = new Prefetch(next, carryLength, spanStart, nextFillTask, CountIsCapped: false);
+            _prefetch = new Prefetch(next, carry.Length, spanStart, nextFillTask, CountIsCapped: false);
         }
         else
         {
-            await RebuildAroundOversizedCarryAsync(next, nextFillTask, previousBuffer, carryOffset, carryLength);
+            await RebuildAroundOversizedCarryAsync(next, nextFillTask, carry);
         }
     }
 
     // The only place the overlap is lost: the carry goes before bytes that are already in next, so its fill must be over.
-    private async ValueTask RebuildAroundOversizedCarryAsync(
-        PooledBuffer next, Task<int> nextFillTask, byte[] previousBuffer, int carryOffset, int carryLength)
+    private async ValueTask RebuildAroundOversizedCarryAsync(PooledBuffer next, Task<int> nextFillTask, ReadOnlyMemory<byte> carry)
     {
+        int carryLength = carry.Length;
         try
         {
             int read = await nextFillTask;
@@ -188,7 +181,7 @@ internal sealed class ChunkReader : IAsyncDisposable
                 Array.Copy(next.Bytes, _reserve, next.Bytes, carryLength, keep);
             }
 
-            Array.Copy(previousBuffer, carryOffset, next.Bytes, 0, carryLength);
+            carry.Span.CopyTo(next.Bytes);
 
             _prefetch = new Prefetch(next, carryLength, SpanStart: 0, Task.FromResult(keep), CountIsCapped: overflow > 0);
         }
@@ -273,7 +266,8 @@ internal sealed class ChunkReader : IAsyncDisposable
 
         _prefetch = null;
 
-        // The fill may still be writing into the slot and reading the stream.
+        // The fill may still be using the slot and the stream. Its result is unused, and a throw from
+        // dispose would replace the failure that stopped reading, so its outcome is deliberately ignored.
         try
         {
             await prefetch.FillTask;

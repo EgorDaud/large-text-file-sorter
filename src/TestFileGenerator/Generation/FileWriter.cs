@@ -1,28 +1,32 @@
 namespace TestFileGenerator.Generation;
 
-// Writes complete lines until the next line would exceed the target.
-internal static class FileWriter
+internal sealed class FileWriter
 {
     private const int LinesPerReport = 4096;
 
-    public static long Write(
-        Stream output,
-        LineComposer composer,
-        long targetBytes,
-        CancellationToken ct,
-        Action<long>? onProgress = null)
+    private readonly LineComposer _composer;
+    private readonly long _targetBytes;
+    private readonly byte[] _line = new byte[LineComposer.MaxComposedLineLength];
+
+    public FileWriter(LineComposer composer, long targetBytes)
     {
-        ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(composer);
         ArgumentOutOfRangeException.ThrowIfNegative(targetBytes);
 
-        byte[] line = new byte[LineComposer.MaxComposedLineLength];
+        _composer = composer;
+        _targetBytes = targetBytes;
+    }
+
+    public long Write(Stream output, CancellationToken ct, Action<long>? onProgress = null)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
         long written = 0;
         int linesSinceReport = 0;
 
-        while (composer.TryComposeNext(line, targetBytes - written, out int lineBytes))
+        while (_composer.TryComposeNext(_line, _targetBytes - written, out int lineBytes))
         {
-            output.Write(line, 0, lineBytes);
+            output.Write(_line, 0, lineBytes);
             written += lineBytes;
 
             if (++linesSinceReport == LinesPerReport)

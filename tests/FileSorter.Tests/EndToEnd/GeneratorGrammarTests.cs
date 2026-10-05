@@ -15,10 +15,10 @@ public sealed class GeneratorGrammarTests
     {
         // Deliberately not GeneratedOutput.Parse: the two programs must not share a parser here.
         GeneratorOptions options = new("unused-by-composition", TargetBytes: 0, Seed: 11, DuplicateRatio: 0.2);
-        LineComposer composer = new(options);
+        FileWriter writer = new(new LineComposer(options), targetBytes: 512 * 1024);
 
         using MemoryStream output = new();
-        FileWriter.Write(output, composer, targetBytes: 512 * 1024, ct: TestContext.Current.CancellationToken);
+        writer.Write(output, TestContext.Current.CancellationToken);
         byte[] bytes = output.ToArray();
 
         Assert.NotEmpty(bytes);
